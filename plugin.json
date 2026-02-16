@@ -1,5 +1,5 @@
 {
-  "name": "worktree-tasks",
-  "description": "Worktree-based task execution skills with agent teams, verification gates, and PR creation",
+  "name": "stuart-tools",
+  "description": "Personal collection of Claude Code skills and tools",
   "skills": "auto"
 }
