@@ -1,0 +1,5 @@
+{
+  "name": "worktree-tasks",
+  "description": "Worktree-based task execution skills with agent teams, verification gates, and PR creation",
+  "skills": "auto"
+}
