@@ -1,6 +1,6 @@
 ---
 name: parallel-tasks
-description: Run multiple implementation tasks in parallel using git worktrees and a team of agents. Each task gets an isolated worktree with a lead (and optionally engineers), verification gates (code review, simplification, requirements check), and its own PR. Use when you have 2+ independent tasks that can run simultaneously.
+description: Run multiple implementation tasks in parallel using git worktrees and a team of agents. Each task gets an isolated worktree with a captain (and optionally engineers), verification gates (code review, simplification, requirements check), and its own PR. Use when you have 2+ independent tasks that can run simultaneously.
 user_invocable: true
 ---
 
@@ -9,8 +9,8 @@ user_invocable: true
 Run multiple independent implementation tasks in parallel. Each task gets:
 - Its own git worktree (isolated working directory)
 - Its own feature branch
-- A **lead** teammate who plans the work (with coordinator approval before implementing)
-- Optional **engineer** teammates for complex tasks (lead requests them in their plan)
+- A **captain** who autonomously plans, builds, and coordinates their worktree team
+- Optional **engineer** teammates for complex tasks (captain requests them)
 - Verification gates (lint/typecheck/test, code review, code simplification, requirements check)
 - Its own PR when complete
 
@@ -26,36 +26,35 @@ Optional overrides the user may provide:
 
 ## Architecture
 
-One flat team. All agents (leads and engineers) are teammates in the same team.
+One flat team. All agents (captains and engineers) are teammates in the same team.
 Naming convention groups them by worktree:
 
 ```
-Coordinator (you — delegate mode, coordination only)
+Coordinator (you — delegate mode, thin dispatcher only)
   └── TeamCreate("parallel-work")
-       ├── task1-lead    (plan mode)  ← worktree 1
-       ├── task1-eng1                  ← spawned after plan approval
-       ├── task1-eng2                  ← spawned after plan approval
-       ├── task2-lead    (plan mode)  ← worktree 2
+       ├── task1-captain                ← worktree 1 (autonomous)
+       ├── task1-eng1                   ← spawned on captain's request
+       ├── task1-eng2                   ← spawned on captain's request
+       ├── task2-captain                ← worktree 2
        ├── task2-eng1
-       └── task3-lead    (plan mode)  ← worktree 3 (solo, no engineers)
+       └── task3-captain                ← worktree 3 (solo, no engineers)
 ```
 
 **Key constraints from the agent teams docs:**
 - **No nested teams** — teammates cannot spawn their own teams or teammates.
-- **Only the coordinator can spawn teammates** — leads request engineers in their plan; the coordinator spawns them after approval.
+- **Only the coordinator can spawn teammates** — captains message the coordinator with staffing requests; the coordinator spawns them.
 - **One team per session** — everything in a single flat team.
 - **All teammates can message each other** — engineers in the same worktree coordinate directly via SendMessage (critical for file ownership).
 
 Verification subagents (code-reviewer, code-simplifier) are spawned via the Task tool
-**without** `team_name` — they're one-shot workers that report results back to the lead.
+**without** `team_name` — they're one-shot workers that report results back to the captain.
 
 ## Tools Used
 
 - **TeamCreate** / **TeamDelete** — create and tear down the single team.
 - **Task** — spawn teammates (with `team_name`) and verification subagents (without `team_name`).
 - **TaskCreate** / **TaskList** / **TaskUpdate** — manage the shared task list.
-- **SendMessage** — DMs between any teammates, shutdown requests, plan approval responses.
-- **ExitPlanMode** — leads submit their plan for coordinator approval.
+- **SendMessage** — DMs between any teammates, shutdown requests, staffing requests.
 
 ## Workflow
 
@@ -89,46 +88,31 @@ Verification subagents (code-reviewer, code-simplifier) are spawned via the Task
    git worktree add {worktree-base}/{task-name} -b feature/{task-name} "$BASE_BRANCH"
    ```
 
-4. **Run project setup in each worktree** — auto-detect from project files:
-   ```bash
-   cd {worktree-base}/{task-name}
-   # Node.js
-   [ -f package.json ] && npm install
-   # Python (uv)
-   [ -f pyproject.toml ] && uv sync --all-extras
-   # Python (pip)
-   [ -f requirements.txt ] && pip install -r requirements.txt
-   # Rust
-   [ -f Cargo.toml ] && cargo build
-   # Go
-   [ -f go.mod ] && go mod download
-   ```
-
-5. **Create the team:**
+4. **Create the team:**
    ```
    TeamCreate(team_name="parallel-work", description="Parallel task execution across {N} worktrees")
    ```
 
-6. **Create a task for each worktree** in the shared task list:
+5. **Create a task for each worktree** in the shared task list:
    ```
    TaskCreate(subject="Implement {task-name}", description="{full task description}", activeForm="Implementing {task-name}")
    ```
 
-### Phase 2: Dispatch Leads (Coordinator)
+### Phase 2: Dispatch Captains (Coordinator)
 
 Switch to **delegate mode** (Shift+Tab) so you stay focused on coordination and don't
 start implementing tasks yourself.
 
-Spawn one **lead** per worktree. Each lead joins the team in **plan mode** — they must
-submit a plan for your approval before implementing.
+Spawn one **captain** per worktree. Captains are autonomous — they plan, build, and
+deliver without needing coordinator approval.
 
-**Task tool settings for each lead:**
+**Task tool settings for each captain:**
 - `subagent_type`: `"general-purpose"`
-- `mode`: `"plan"`
+- `mode`: `"bypassPermissions"`
 - `team_name`: `"parallel-work"`
-- `name`: `"{task-name}-lead"`
+- `name`: `"{task-name}-captain"`
 
-**Every lead prompt MUST include:**
+**Every captain prompt MUST include:**
 
 1. The working directory constraint (with the actual resolved path):
    ```
@@ -148,62 +132,58 @@ submit a plan for your approval before implementing.
 4. The coordinator's name for messaging back:
    ```
    ## Coordinator
-   The coordinator's name is "{coordinator-name}". Message them via SendMessage when
-   you complete your PR or need help. Your task has already been assigned to you in
-   the shared task list — update its status to in_progress when you start building,
-   and completed when your PR is created.
+   The coordinator's name is "{coordinator-name}". Message them via SendMessage to:
+   - Request teammates (engineers, etc.) — include role names, sub-tasks, and file ownership
+   - Report your PR when complete
+   - Ask for help if blocked
+
+   Your task has already been assigned to you in the shared task list — update its
+   status to in_progress when you start building, and completed when your PR is created.
    ```
    To find your own name for this placeholder, read the team config at
    `~/.claude/teams/parallel-work/config.json` after creating the team.
 
-5. The full **Lead Playbook** (below) — paste it into each lead's prompt.
+5. The full **Captain Playbook** (below) — paste it into each captain's prompt.
 
-After spawning all leads, use `TaskUpdate` to assign each task to the corresponding lead.
+After spawning all captains, use `TaskUpdate` to assign each task to the corresponding captain.
 
-### Phase 3: Approve Plans and Spawn Engineers (Coordinator)
+### Phase 3: Handle Staffing Requests (Coordinator)
 
-Each lead starts in **plan mode** — they orient, read the codebase, and submit a plan via
-`ExitPlanMode`. You receive a `plan_approval_request` message for each lead.
+Captains are autonomous — they orient, plan, and may start building immediately.
+If a captain needs teammates, they'll message you with a staffing request.
 
-For each plan:
-1. Review the lead's proposed approach (files to change, sub-tasks, staffing request)
-2. If the plan requests engineers, note how many and for what sub-tasks
-3. **Approve** via `SendMessage(type="plan_approval_response", recipient="{task-name}-lead", request_id="{id}", approve=true)`
-4. **Reject** via `SendMessage(type="plan_approval_response", recipient="{task-name}-lead", ..., approve=false, content="feedback")` — lead revises and resubmits
-
-**After approving a plan that requests engineers**, spawn them into the team:
+When you receive a staffing request, spawn the requested roles:
 - `subagent_type`: `"general-purpose"`
 - `mode`: `"bypassPermissions"`
 - `team_name`: `"parallel-work"`
 - `name`: `"{task-name}-eng1"`, `"{task-name}-eng2"`, etc.
 
-Each engineer's prompt MUST include:
-- The same worktree path constraint as the lead
-- Their specific sub-task (from the lead's plan)
-- Quality standards from the lead's plan
+Each teammate's prompt MUST include:
+- The same worktree path constraint as the captain
+- Their specific sub-task (from the captain's request)
 - Which files they own (to avoid conflicts)
-- Their lead's name for coordination: `"Message {task-name}-lead if you have questions or need to coordinate file access."`
+- Their captain's name for coordination: `"Message {task-name}-captain if you have questions or need to coordinate file access."`
 
-Also create TaskCreate entries for each engineer's sub-task and assign them.
+Also create TaskCreate entries for each teammate's sub-task and assign them.
 
 ### Phase 4: Monitor (Coordinator)
 
-After approving plans and spawning engineers, leads implement and report back:
+Captains implement and report back:
 
-1. **Task list** — Use `TaskList` to see all tasks at a glance. Leads and engineers update status as they progress.
-2. **Messages** — Leads send you messages when they complete (with PR URLs) or need help. Delivered automatically.
-3. **Shutdown** — As each lead reports a PR, shut down the lead and its engineers:
+1. **Task list** — Use `TaskList` to see all tasks at a glance. Captains and engineers update status as they progress.
+2. **Messages** — Captains send you messages when they complete (with PR URLs) or need help. Delivered automatically.
+3. **Shutdown** — As each captain reports a PR, shut down the captain's team:
    ```
    SendMessage(type="shutdown_request", recipient="{task-name}-eng1")
    SendMessage(type="shutdown_request", recipient="{task-name}-eng2")
-   SendMessage(type="shutdown_request", recipient="{task-name}-lead")
+   SendMessage(type="shutdown_request", recipient="{task-name}-captain")
    ```
 4. **Track progress** in a summary table:
    ```
-   | Task | Lead | Engineers | Status | PR |
-   |------|------|-----------|--------|----|
-   | item-4-hybrid-search | task4-lead | task4-eng1, task4-eng2 | PR created | #42 |
-   | item-7-merge-suggestions | task7-lead | (solo) | In progress | — |
+   | Task | Captain | Engineers | Status | PR |
+   |------|---------|-----------|--------|----|
+   | item-4-hybrid-search | task4-captain | task4-eng1, task4-eng2 | PR created | #42 |
+   | item-7-merge-suggestions | task7-captain | (solo) | In progress | — |
    ```
 
 ### Phase 5: Cleanup (Coordinator)
@@ -219,26 +199,38 @@ Once all teammates have shut down (`TeamDelete` will fail if any are still activ
    # If removal fails due to uncommitted changes:
    git worktree remove --force {worktree-base}/{task-name}
    ```
-3. Present final summary with all PR URLs.
+4. Present final summary with all PR URLs.
 
 ---
 
-## Lead Playbook
+## Captain Playbook
 
-**Paste this entire section into each lead's prompt.** It defines how a lead operates inside its worktree.
+**Paste this entire section into each captain's prompt.** It defines how a captain operates inside their worktree.
 
 ### Step 1: Orient
 
-Read the project's CLAUDE.md (if it exists) in your worktree root. Extract:
+**Run project setup** — auto-detect from project files in your worktree:
+```bash
+# Node.js
+[ -f package.json ] && npm install
+# Python (uv)
+[ -f pyproject.toml ] && uv sync --all-extras
+# Python (pip)
+[ -f requirements.txt ] && pip install -r requirements.txt
+# Rust
+[ -f Cargo.toml ] && cargo build
+# Go
+[ -f go.mod ] && go mod download
+```
+
+**Read the project's CLAUDE.md** (if it exists) in your worktree root. Extract:
 - **Quality commands** — lint, typecheck, test commands (e.g., `uv run ruff check`, `uv run pyright`, `uv run pytest`)
 - **Coding standards** — line length, import style, type annotation policy, suppression rules
 - **Project structure** — where code lives, key patterns, naming conventions
 
-These will be used in verification gates and included in your plan.
+These will be used in verification gates and in your plan.
 
-### Step 2: Plan and Submit
-
-You start in **plan mode** — you can read files and explore, but cannot edit.
+### Step 2: Plan
 
 Analyze your assigned task:
 - Read relevant existing code to understand the codebase
@@ -246,21 +238,29 @@ Analyze your assigned task:
 - Identify files that will be created or modified
 - Note any dependencies between sub-tasks
 
-Write your plan and include a **staffing request**:
+Decide on staffing:
 
-| Complexity | Request | When |
-|------------|---------|------|
-| Simple | "No engineers needed — I'll implement this solo." | Single-file change, straightforward logic |
-| Medium | "Requesting 1 engineer for {sub-task}." | Multi-file but can split cleanly |
-| Complex | "Requesting 2-3 engineers: eng1 owns {files}, eng2 owns {files}." | Independent sub-tasks that parallelize |
+| Complexity | Action | When |
+|------------|--------|------|
+| Simple | Proceed solo — skip to Step 3. | Single-file change, straightforward logic |
+| Medium | Message coordinator requesting 1 engineer. | Multi-file but can split cleanly |
+| Complex | Message coordinator requesting 2-3 engineers with file ownership. | Independent sub-tasks that parallelize |
 
-Include file ownership in the plan so the coordinator can relay it to engineers.
+**If you need teammates**, message the coordinator with your staffing request. Include
+role names, sub-tasks, and file ownership for each. Then wait for the coordinator to
+confirm they've been spawned before proceeding.
 
-Call `ExitPlanMode` to submit your plan. Wait for the coordinator to approve (and spawn engineers if requested) before proceeding.
+```
+SendMessage(type="message", recipient="{coordinator-name}",
+  content="Staffing request for {task-name}:
+    - {task-name}-eng1: {sub-task}, owns {files}
+    - {task-name}-eng2: {sub-task}, owns {files}",
+  summary="Staffing request for {task-name}")
+```
+
+**If solo**, proceed directly to Step 3.
 
 ### Step 3: Build
-
-After plan approval:
 
 **If solo:** Implement directly. Follow the project's coding standards from Step 1.
 
@@ -270,7 +270,7 @@ After plan approval:
 - Monitor TaskList for sub-task completion
 - Resolve any file ownership conflicts immediately
 
-**Git workflow:** Engineers edit files but do NOT commit. You (the lead) make the final
+**Git workflow:** Engineers edit files but do NOT commit. You (the captain) make the final
 commit in Step 5 after all verification gates pass. This avoids sequencing issues with
 multiple commits from different agents in the same worktree.
 
@@ -381,13 +381,15 @@ Then mark your task as completed via TaskUpdate and go idle. The coordinator wil
 
 ## Rules
 
-- **Never** let multiple agents edit the same files — leads must assign clear file ownership
+- **Never** let multiple agents edit the same files — captains must assign clear file ownership
 - **Always** create worktrees BEFORE spawning any teammates
 - **Always** run all four verification gates before creating a PR
-- **Only the coordinator spawns teammates** — leads request engineers in their plan
-- Leads must read CLAUDE.md — do not hardcode project-specific commands in this skill
+- **Only the coordinator spawns teammates** — captains message the coordinator with staffing requests
+- **Coordinator is a thin dispatcher** — spawn agents, handle staffing requests, monitor for PRs
+- **Captains are autonomous** — they plan, build, and verify without needing coordinator approval
+- Captains must read CLAUDE.md — do not hardcode project-specific commands in this skill
 - Teammates may ignore shutdown requests while mid-turn — retry when they go idle
-- Shut down engineers BEFORE their lead (leads may need to do final integration)
+- Shut down engineers BEFORE their captain (captains may need to do final integration)
 - Engineers in the same worktree MUST coordinate file access via SendMessage
 
 ## Example Invocation
@@ -397,7 +399,7 @@ User: "Run these 3 tasks in parallel:
 2. item-7-merge-suggestions: Implement merge suggestion system with confidence thresholds
 3. item-14-halfvec: Migrate embeddings from vector to halfvec for 50% storage reduction"
 
-→ Detects `worktrees/` directory, creates 3 worktrees, creates team, spawns 3 leads (plan mode).
-→ Leads orient and submit plans. Coordinator reviews plans and spawns requested engineers.
-→ Leads coordinate engineers, run 4 verification gates, create PRs.
-→ Coordinator collects 3 PR URLs, shuts down all teammates, cleans up, presents summary.
+-> Detects `worktrees/` directory, creates 3 worktrees, creates team, spawns 3 captains.
+-> Captains orient, plan, and request engineers as needed. Coordinator spawns requested engineers.
+-> Captains coordinate their teams, run 4 verification gates, create PRs.
+-> Coordinator collects 3 PR URLs, shuts down all teammates, cleans up, presents summary.
