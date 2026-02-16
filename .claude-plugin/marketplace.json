@@ -1,0 +1,14 @@
+{
+  "name": "stuart-plugins",
+  "description": "Personal collection of Claude Code plugins for development workflows and productivity",
+  "owner": {
+    "name": "Stuart Parmenter"
+  },
+  "plugins": [
+    {
+      "name": "dev-workflow",
+      "description": "Development workflow skills and tools",
+      "source": "./dev-workflow"
+    }
+  ]
+}
