@@ -1,7 +1,7 @@
 {
   "name": "auto-format",
   "description": "Auto-format files after Claude edits them. Supports Go (goimports/gofmt), Python (ruff/black), and JS/TS (biome/prettier) with convention-based formatter detection.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "Stuart Parmenter"
   },
