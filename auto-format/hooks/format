@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INPUT=$(cat)
+
+# Extract file paths based on tool type.
+# Edit/Write: tool_input.file_path
+# MultiEdit: tool_input.edits[].file_path (deduplicated)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
+
+case "$TOOL_NAME" in
+  MultiEdit)
+    FILES=$(echo "$INPUT" | jq -r '[.tool_input.edits[].file_path] | unique | .[]' 2>/dev/null)
+    ;;
+  *)
+    FILES=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+    ;;
+esac
+
+[ -z "$FILES" ] && exit 0
+
+format_file() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+
+  case "$file" in
+    *.go)
+      if command -v goimports &>/dev/null; then
+        goimports -w "$file"
+      elif command -v gofmt &>/dev/null; then
+        gofmt -w "$file"
+      fi
+      ;;
+    *.py)
+      if command -v ruff &>/dev/null; then
+        ruff format --quiet "$file"
+      elif command -v black &>/dev/null; then
+        black --quiet "$file"
+      fi
+      ;;
+    *.ts|*.tsx|*.js|*.jsx|*.mjs)
+      if command -v biome &>/dev/null; then
+        biome format --write "$file"
+      elif command -v prettier &>/dev/null; then
+        prettier --write --log-level silent "$file"
+      elif command -v bunx &>/dev/null; then
+        bunx prettier --write --log-level silent "$file"
+      elif command -v npx &>/dev/null; then
+        npx prettier --write --log-level silent "$file"
+      fi
+      ;;
+  esac
+}
+
+while IFS= read -r file; do
+  format_file "$file" || true
+done <<< "$FILES"
+
+exit 0
