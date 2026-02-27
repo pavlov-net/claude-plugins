@@ -41,12 +41,18 @@ format_file() {
     *.ts|*.tsx|*.js|*.jsx|*.mjs)
       if command -v biome &>/dev/null; then
         biome format --write "$file" 2>/dev/null
-      elif [ -x ./node_modules/.bin/biome ]; then
+      elif [ -x ./node_modules/.bin/biome ] && command -v node &>/dev/null; then
         ./node_modules/.bin/biome format --write "$file" 2>/dev/null
+      elif command -v bun &>/dev/null && [ -d ./node_modules/@biomejs ]; then
+        bun x biome format --write "$file" 2>/dev/null
+      elif command -v npx &>/dev/null && [ -d ./node_modules/@biomejs ]; then
+        npx biome format --write "$file" 2>/dev/null
       elif command -v prettier &>/dev/null; then
         prettier --write --log-level silent "$file" 2>/dev/null
-      elif [ -x ./node_modules/.bin/prettier ]; then
+      elif [ -x ./node_modules/.bin/prettier ] && command -v node &>/dev/null; then
         ./node_modules/.bin/prettier --write --log-level silent "$file" 2>/dev/null
+      elif command -v bun &>/dev/null && [ -d ./node_modules/prettier ]; then
+        bun x prettier --write --log-level silent "$file" 2>/dev/null
       fi
       ;;
   esac
