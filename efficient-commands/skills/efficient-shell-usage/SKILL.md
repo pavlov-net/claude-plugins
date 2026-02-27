@@ -1,5 +1,6 @@
 ---
 name: efficient-shell-usage
+user_invocable: false
 description: >
   This skill should be used when implementing features, fixing bugs, running tests,
   running linting or formatting, building projects, verifying changes, debugging
