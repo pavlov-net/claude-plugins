@@ -1,0 +1,10 @@
+{
+  "name": "efficient-commands",
+  "description": "Teaches Claude to use shell commands efficiently — avoid re-running expensive commands and stop tail/head chasing.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Stuart Parmenter"
+  },
+  "license": "MIT",
+  "keywords": ["efficiency", "shell", "commands", "bash", "testing"]
+}
