@@ -14,6 +14,11 @@
       "name": "auto-format",
       "description": "Auto-format files after Claude edits them. Supports Go, Python, and JS/TS.",
       "source": "./auto-format"
+    },
+    {
+      "name": "efficient-commands",
+      "description": "Teaches Claude to use shell commands efficiently — avoid re-running expensive commands and stop tail/head chasing.",
+      "source": "./efficient-commands"
     }
   ]
 }
