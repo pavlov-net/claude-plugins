@@ -1,7 +1,7 @@
 {
   "name": "tsgo-lsp",
   "description": "TypeScript 7 native LSP for Claude Code. Uses tsgo (the Go-based TypeScript compiler) instead of the traditional typescript-language-server for faster type checking and diagnostics. Requires tsgo to be installed (npm install -g @typescript/native-preview).",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Stuart Parmenter"
   },
