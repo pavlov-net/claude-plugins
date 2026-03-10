@@ -1,7 +1,7 @@
 {
   "tsgo": {
     "command": "tsgo",
-    "args": ["lsp", "-stdio"],
+    "args": ["--lsp", "-stdio"],
     "extensionToLanguage": {
       ".ts": "typescript",
       ".tsx": "typescriptreact",
