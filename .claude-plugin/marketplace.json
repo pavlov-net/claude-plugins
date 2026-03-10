@@ -19,6 +19,11 @@
       "name": "efficient-commands",
       "description": "Teaches Claude to use shell commands efficiently — avoid re-running expensive commands and stop tail/head chasing.",
       "source": "./efficient-commands"
+    },
+    {
+      "name": "tsgo-lsp",
+      "description": "TypeScript 7 native LSP — uses tsgo for faster type checking and diagnostics.",
+      "source": "./tsgo-lsp"
     }
   ]
 }
