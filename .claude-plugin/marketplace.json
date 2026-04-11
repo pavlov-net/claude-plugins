@@ -12,7 +12,7 @@
     },
     {
       "name": "auto-format",
-      "description": "Auto-format files after Claude edits them. Supports Go, Python, and JS/TS.",
+      "description": "Auto-format files after Claude edits them. Supports Go, Rust, Python, and JS/TS.",
       "source": "./auto-format"
     },
     {
