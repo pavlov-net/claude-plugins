@@ -38,6 +38,11 @@ format_file() {
         black --quiet "$file"
       fi
       ;;
+    *.rs)
+      if command -v rustfmt &>/dev/null; then
+        rustfmt --edition 2021 "$file" 2>/dev/null
+      fi
+      ;;
     *.ts|*.tsx|*.js|*.jsx|*.mjs)
       if command -v biome &>/dev/null; then
         biome format --write "$file" 2>/dev/null
