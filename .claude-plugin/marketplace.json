@@ -6,11 +6,6 @@
   },
   "plugins": [
     {
-      "name": "dev-workflow",
-      "description": "Development workflow skills and tools",
-      "source": "./dev-workflow"
-    },
-    {
       "name": "auto-format",
       "description": "Auto-format files after Claude edits them. Supports Go, Rust, Python, and JS/TS.",
       "source": "./auto-format"
