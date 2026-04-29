@@ -1,4 +1,4 @@
-# stuart-plugins
+# pavlov-net/claude-plugins
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin marketplace — small, focused plugins for development workflows and productivity.
 
