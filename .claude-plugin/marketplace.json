@@ -19,6 +19,11 @@
       "name": "tsgo-lsp",
       "description": "TypeScript 7 native LSP — uses tsgo for faster type checking and diagnostics.",
       "source": "./tsgo-lsp"
+    },
+    {
+      "name": "bevy",
+      "description": "Authoritative idioms for Bevy 0.18 game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance.",
+      "source": "./bevy"
     }
   ]
 }
