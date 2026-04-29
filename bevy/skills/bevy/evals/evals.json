@@ -1,0 +1,68 @@
+{
+  "skill_name": "bevy",
+  "evals": [
+    {
+      "id": 1,
+      "name": "spawn-time-reaction",
+      "prompt": "I'm working on a Bevy 0.18 game. Whenever a Creature entity dies, I want to spawn a particle effect at its position and play a death sound. How should I wire this up? Give me the recommended pattern with brief code.",
+      "expected_behavior": [
+        "Recommends an EntityEvent (e.g. CreatureDied { entity }) plus an observer, OR an On<Remove, Creature>/On<Despawn, Creature> lifecycle observer — not the old EventReader/EventWriter approach.",
+        "Uses 0.17+ idioms: On<E> parameter (not Trigger<E>), commands.trigger() to fire, derive(EntityEvent) when the entity is the target.",
+        "Mentions reading the dying creature's Transform/position via the observer's system params before despawn fires (or stashing it in the event).",
+        "Does not suggest Event with EventReader, does not suggest world.trigger_targets.",
+        "Code uses MeshMaterial3d/Mesh3d wrappers if it touches material handles (does not use Query<&Handle<...>>)."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "cheatsheet-recall-handle",
+      "prompt": "I have this Bevy code and it stopped compiling: `fn pulse(query: Query<&Handle<StandardMaterial>>) { ... }`. The error says Handle<StandardMaterial> is not a Component. What changed and what's the modern way to write this?",
+      "expected_behavior": [
+        "Identifies that the change was in 0.17 — Handle<T> is no longer a Component for materials/meshes.",
+        "Recommends Query<&MeshMaterial3d<StandardMaterial>>.",
+        "Explains that the underlying handle is accessed via .0 (or pattern destructuring) on the wrapper.",
+        "Optionally mentions related wrappers: Mesh3d, Mesh2d, MeshMaterial2d.",
+        "Does not invent a non-existent fix; does not suggest reverting to an older Bevy version."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "damage-batching",
+      "prompt": "Design a damage system for a Bevy 0.18 game. I have multiple sources of damage — melee attacks, ranged projectiles, environmental hazards (fire, poison) — each running in its own system. I want one place that applies all damage to entities and triggers death checks. What's the idiomatic structure?",
+      "expected_behavior": [
+        "Recommends Message (#[derive(Message)] struct DamageDealt { target, amount, ... }) for the multi-producer/single-consumer batching pattern, NOT Event/Observer.",
+        "Uses MessageWriter in producer systems and MessageReader in the apply_damage consumer system.",
+        "Registers with app.add_message::<DamageDealt>() (not the old add_event).",
+        "Suggests separating death detection — either a separate DeathOccurred event/message fired from apply_damage, OR an Observer on Health changes.",
+        "Mentions ordering: damage producers in Update before apply_damage; apply_damage before death check (e.g., via system sets or .chain()).",
+        "Suggests one plugin per concern (CombatPlugin) registering all of this."
+      ]
+    },
+    {
+      "id": 4,
+      "name": "state-machine-cleanup",
+      "prompt": "I'm setting up a Bevy 0.18 game with a main menu, gameplay, and game-over screen. How do I structure the states, and what's the cleanest way to make sure menus despawn when transitioning between them so I don't leak HUD entities?",
+      "expected_behavior": [
+        "Defines a #[derive(States, ...)] enum with the three states; registers with app.init_state::<AppState>().",
+        "Uses OnEnter(AppState::X) / OnExit(AppState::X) for setup/teardown systems.",
+        "Recommends DespawnOnExit(AppState::X) on entities that should not survive the state — the canonical 0.18 pattern that eliminates manual cleanup systems.",
+        "Optionally mentions sub-states for nested states (e.g. Paused inside InGame), or computed states for 'is the game in any of these states' run conditions.",
+        "Notes that next_state.set(X) re-fires OnEnter even if already in X (0.18 change); set_if_neq for the older skip-if-equal behavior.",
+        "Does not propose manually iterating queries to despawn entities one by one."
+      ]
+    },
+    {
+      "id": 5,
+      "name": "plugin-organization",
+      "prompt": "I'm starting a new feature for a Bevy 0.18 game: an inventory system (items, equipment, slots). The codebase already has CombatPlugin and MovementPlugin. How should I organize the inventory code? What goes in the plugin, where do I put types, and how do I keep system ordering sane as more features arrive?",
+      "expected_behavior": [
+        "Recommends one plugin per feature: an InventoryPlugin (struct or fn-as-plugin) that registers messages/observers/systems for inventory.",
+        "Recommends organizing by feature, not by file kind: src/inventory/{plugin,components,systems,messages}.rs (or similar), not src/components/inventory.rs + src/systems/inventory.rs.",
+        "Recommends a centralized SystemSet enum (configured once in app.rs/main.rs) with named ordering phases; plugins drop systems into named sets via .in_set(...) — does NOT recommend each plugin call configure_sets.",
+        "Uses #[require(...)] for required components when items always go together, rather than tuple bundles.",
+        "Mentions resources for plugin config when runtime tuning matters; plugin-struct fields only for build-time-only choices.",
+        "Mentions visibility hygiene — pub(crate) by default, pub for the plugin and a small public API of components/messages."
+      ]
+    }
+  ]
+}
