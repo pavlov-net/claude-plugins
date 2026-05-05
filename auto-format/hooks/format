@@ -40,7 +40,21 @@ format_file() {
       ;;
     *.rs)
       if command -v rustfmt &>/dev/null; then
-        rustfmt --edition 2021 "$file" 2>/dev/null
+        local edition=""
+        local dir
+        dir=$(cd "$(dirname "$file")" && pwd)
+        while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+          if [ -f "$dir/Cargo.toml" ]; then
+            edition=$(grep -E '^\s*edition\s*=' "$dir/Cargo.toml" | head -n1 | sed -E 's/.*"([0-9]+)".*/\1/')
+            break
+          fi
+          dir=$(dirname "$dir")
+        done
+        if [ -n "$edition" ]; then
+          rustfmt --edition "$edition" "$file" 2>/dev/null
+        else
+          rustfmt "$file" 2>/dev/null
+        fi
       fi
       ;;
     *.ts|*.tsx|*.js|*.jsx|*.mjs)
