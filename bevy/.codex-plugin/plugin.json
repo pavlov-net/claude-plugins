@@ -1,0 +1,17 @@
+{
+  "name": "bevy",
+  "version": "0.1.0",
+  "description": "Authoritative idioms for Bevy 0.18 game projects in Rust. Covers ECS data design, communication (Event/Message/Observer), plugin organization, scheduling, assets, UI, error handling, testing, performance, and 0.16→0.18 migration.",
+  "author": {
+    "name": "Stuart Parmenter"
+  },
+  "homepage": "https://github.com/pavlov-net/claude-plugins",
+  "repository": "https://github.com/pavlov-net/claude-plugins",
+  "license": "MIT",
+  "keywords": ["bevy", "rust", "ecs", "game-development", "skill"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Bevy",
+    "shortDescription": "Bevy 0.18 idioms for Rust game projects"
+  }
+}
