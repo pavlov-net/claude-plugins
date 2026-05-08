@@ -11,6 +11,10 @@ Add the marketplace, then install the plugins you want:
 /plugin install <plugin-name>@stuart-plugins
 ```
 
+### Codex CLI
+
+The `bevy` skill is also published as a [Codex plugin](https://developers.openai.com/codex/plugins) from this same repo (via `.agents/plugins/marketplace.json`). Add the marketplace through `codex /plugins`, then install `bevy`. Other plugins here use Claude-specific features (hooks, LSP servers) and aren't ported to Codex.
+
 ## Plugins
 
 | Plugin | Description |
