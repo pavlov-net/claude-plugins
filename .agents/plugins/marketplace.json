@@ -6,11 +6,9 @@
   "plugins": [
     {
       "name": "bevy",
-      "version": "0.1.0",
-      "description": "Authoritative idioms for Bevy 0.18 game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance.",
       "source": {
         "source": "local",
-        "path": "../../bevy"
+        "path": "./bevy"
       },
       "policy": {
         "installation": "AVAILABLE"
