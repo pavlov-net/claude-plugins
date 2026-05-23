@@ -1,7 +1,7 @@
 # Performance and profiling
 
 ## Contents
-- Cheap optimizations — change detection, query filters, run conditions, parallel iteration
+- Cheap optimizations — change detection, query filters, run conditions, parallel iteration, contiguous/SIMD iteration (0.19)
 - Fixed timestep — for physics, networking, deterministic simulation
 - Profiling tools — Tracy, Chrome tracing, perf flame graphs, GPU vendor tools
 - Compile profiles — `release`, `dev` with package-level `opt-level = 3`
@@ -89,6 +89,24 @@ fn process(
 ```
 
 `command_scope` gives each parallel iteration its own `Commands` instance.
+
+### Contiguous iteration / SIMD (0.19)
+
+Table-stored components are already laid out flat in memory, but the normal `Query` iterator hands you one row at a time, so the compiler can't see the contiguous array. `contiguous_iter` / `contiguous_iter_mut` (0.19) hand you the whole table column slice at once, which lets LLVM auto-vectorize — or you reach for explicit SIMD:
+
+```rust
+fn integrate(mut query: Query<(&mut Position, &Velocity)>) {
+    for (mut pos, vel) in query.contiguous_iter_mut().unwrap() {
+        // pos: ContiguousMut<Position> (&mut T data → derefs to &mut [Position])
+        // vel: &[Velocity]             (shared &T data is a plain slice; Ref<T> would give ContiguousRef)
+        for (p, v) in pos.iter_mut().zip(vel.iter()) {
+            p.0 += v.0;
+        }
+    }
+}
+```
+
+They return `Result` — `Ok` only when the query is **dense**: all fetched components use table storage, and no per-row filters (`Changed`/`Added`) are present (archetypal filters like `With`/`Without` are fine). Because those are fixed properties of the query type, `.unwrap()` is safe in non-generic code. `ContiguousMut::bypass_change_detection()` gives the raw `&mut [T]` for the last bit of speed when you don't need change ticks. Worth it on CPU-bound bulk numeric work (physics, particles, large simulations); not worth the bother on small or sparsely-touched queries.
 
 ## Fixed timestep
 
@@ -344,15 +362,22 @@ cargo llvm-lines --release
 
 ### Cargo feature collections
 
-In 0.18, top-level collections replace hand-listing dozens of features:
+In 0.18, top-level collections replaced hand-listing dozens of features:
 
 ```toml
-bevy = { version = "0.18", default-features = false, features = ["3d", "ui"] }
+bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
 ```
 
 Available collections: `2d`, `3d`, `ui`, `audio`, `dev`. Mid-level: `2d_api`, `3d_api`, `default_app`, `default_platform`.
 
 `dev` should not be enabled in release builds — it pulls in `bevy_dev_tools`, fast-compile features, etc.
+
+0.19 untangled a few of these so you can swap subsystems without a feature soup:
+
+- **`audio` and `ui` are no longer implied by `2d`/`3d`.** If you build with `default-features = false` and want them, list them explicitly. The upside: dropping `bevy_audio` (e.g. to use `bevy_seedling`) or swapping the UI framework is now just "disable defaults, add `["3d"]`" instead of re-listing everything-except-the-one-thing.
+- **`audio` is a default feature in its own right** — full default builds are unchanged.
+- **`bevy_window`, `bevy_input_focus`, and `custom_cursor` left `default_app`** (they're in `common_api`/`ui_api`/`default_platform` now). Headless tools and servers that depend on `default_app` compile fewer deps; re-add those three if you relied on them.
+- **Android activity backends** (`android-game-activity`, `android-native-activity`) are no longer default — pick one explicitly.
 
 ### Removing unused features
 

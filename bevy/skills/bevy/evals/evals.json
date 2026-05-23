@@ -4,13 +4,14 @@
     {
       "id": 1,
       "name": "spawn-time-reaction",
-      "prompt": "I'm working on a Bevy 0.18 game. Whenever a Creature entity dies, I want to spawn a particle effect at its position and play a death sound. How should I wire this up? Give me the recommended pattern with brief code.",
+      "prompt": "I'm working on a Bevy 0.19 game. Whenever a Creature entity dies, I want to spawn a particle effect at its position and play a death sound. How should I wire this up? Give me the recommended pattern with brief code.",
       "expected_behavior": [
         "Recommends an EntityEvent (e.g. CreatureDied { entity }) plus an observer, OR an On<Remove, Creature>/On<Despawn, Creature> lifecycle observer — not the old EventReader/EventWriter approach.",
         "Uses 0.17+ idioms: On<E> parameter (not Trigger<E>), commands.trigger() to fire, derive(EntityEvent) when the entity is the target.",
         "Mentions reading the dying creature's Transform/position via the observer's system params before despawn fires (or stashing it in the event).",
         "Does not suggest Event with EventReader, does not suggest world.trigger_targets.",
-        "Code uses MeshMaterial3d/Mesh3d wrappers if it touches material handles (does not use Query<&Handle<...>>)."
+        "Code uses MeshMaterial3d/Mesh3d wrappers if it touches material handles (does not use Query<&Handle<...>>).",
+        "If it mentions the replace/discard lifecycle event, uses the 0.19 name Discard (not Replace)."
       ]
     },
     {
@@ -28,7 +29,7 @@
     {
       "id": 3,
       "name": "damage-batching",
-      "prompt": "Design a damage system for a Bevy 0.18 game. I have multiple sources of damage — melee attacks, ranged projectiles, environmental hazards (fire, poison) — each running in its own system. I want one place that applies all damage to entities and triggers death checks. What's the idiomatic structure?",
+      "prompt": "Design a damage system for a Bevy 0.19 game. I have multiple sources of damage — melee attacks, ranged projectiles, environmental hazards (fire, poison) — each running in its own system. I want one place that applies all damage to entities and triggers death checks. What's the idiomatic structure?",
       "expected_behavior": [
         "Recommends Message (#[derive(Message)] struct DamageDealt { target, amount, ... }) for the multi-producer/single-consumer batching pattern, NOT Event/Observer.",
         "Uses MessageWriter in producer systems and MessageReader in the apply_damage consumer system.",
@@ -41,20 +42,20 @@
     {
       "id": 4,
       "name": "state-machine-cleanup",
-      "prompt": "I'm setting up a Bevy 0.18 game with a main menu, gameplay, and game-over screen. How do I structure the states, and what's the cleanest way to make sure menus despawn when transitioning between them so I don't leak HUD entities?",
+      "prompt": "I'm setting up a Bevy 0.19 game with a main menu, gameplay, and game-over screen. How do I structure the states, and what's the cleanest way to make sure menus despawn when transitioning between them so I don't leak HUD entities?",
       "expected_behavior": [
         "Defines a #[derive(States, ...)] enum with the three states; registers with app.init_state::<AppState>().",
         "Uses OnEnter(AppState::X) / OnExit(AppState::X) for setup/teardown systems.",
-        "Recommends DespawnOnExit(AppState::X) on entities that should not survive the state — the canonical 0.18 pattern that eliminates manual cleanup systems.",
+        "Recommends DespawnOnExit(AppState::X) on entities that should not survive the state — the canonical pattern that eliminates manual cleanup systems.",
         "Optionally mentions sub-states for nested states (e.g. Paused inside InGame), or computed states for 'is the game in any of these states' run conditions.",
-        "Notes that next_state.set(X) re-fires OnEnter even if already in X (0.18 change); set_if_neq for the older skip-if-equal behavior.",
+        "Notes that next_state.set(X) re-fires OnEnter even if already in X, and that in 0.19 this also re-runs DespawnOnEnter/DespawnOnExit; set_if_neq for the skip-if-equal behavior.",
         "Does not propose manually iterating queries to despawn entities one by one."
       ]
     },
     {
       "id": 5,
       "name": "plugin-organization",
-      "prompt": "I'm starting a new feature for a Bevy 0.18 game: an inventory system (items, equipment, slots). The codebase already has CombatPlugin and MovementPlugin. How should I organize the inventory code? What goes in the plugin, where do I put types, and how do I keep system ordering sane as more features arrive?",
+      "prompt": "I'm starting a new feature for a Bevy 0.19 game: an inventory system (items, equipment, slots). The codebase already has CombatPlugin and MovementPlugin. How should I organize the inventory code? What goes in the plugin, where do I put types, and how do I keep system ordering sane as more features arrive?",
       "expected_behavior": [
         "Recommends one plugin per feature: an InventoryPlugin (struct or fn-as-plugin) that registers messages/observers/systems for inventory.",
         "Recommends organizing by feature, not by file kind: src/inventory/{plugin,components,systems,messages}.rs (or similar), not src/components/inventory.rs + src/systems/inventory.rs.",
@@ -62,6 +63,74 @@
         "Uses #[require(...)] for required components when items always go together, rather than tuple bundles.",
         "Mentions resources for plugin config when runtime tuning matters; plugin-struct fields only for build-time-only choices.",
         "Mentions visibility hygiene — pub(crate) by default, pub for the plugin and a small public API of components/messages."
+      ]
+    },
+    {
+      "id": 6,
+      "name": "resources-as-components",
+      "prompt": "I just upgraded my Bevy game to 0.19 and now `#[derive(Component, Resource)] struct GameConfig { ... }` won't compile — something about conflicting Component implementations. What changed and how do I fix it?",
+      "expected_behavior": [
+        "Explains that in 0.19 Resource became a subtrait of Component, so #[derive(Resource)] now ALSO implements Component — deriving both gives two conflicting Component impls.",
+        "Recommends dropping the Component derive if it's only used as a resource (just #[derive(Resource)]), or splitting into two distinct types if both a component flavor and a resource flavor are genuinely needed.",
+        "Does NOT claim that co-deriving is fine, and does not invent a #[component]/#[resource] attribute to suppress the conflict.",
+        "May correctly mention related 0.19 consequences: #[reflect(Resource)] becoming a marker (use ReflectComponent for reflection), broad queries needing Without<IsResource>, or resources now supporting hooks/observers/immutability — but does not fabricate APIs."
+      ]
+    },
+    {
+      "id": 7,
+      "name": "text-font-update",
+      "prompt": "My Bevy UI text code broke after upgrading to 0.19: `TextFont { font: asset_server.load(\"font.ttf\"), font_size: 24.0, ..default() }` gives type errors on both font and font_size. What's the correct 0.19 form?",
+      "expected_behavior": [
+        "Identifies that 0.19 migrated text to parley: TextFont.font is now a FontSource and font_size is now a FontSize enum.",
+        "Gives the fix: font: asset_server.load(\"font.ttf\").into() (or FontSource::Family/FontSource::Monospace), font_size: FontSize::Px(24.0).",
+        "Does not claim the old f32 / Handle<Font> still works.",
+        "May correctly mention new weight/width/style fields, LetterSpacing, FontSize::Rem/Vh responsive units, or the system_font_discovery feature — without fabricating API names."
+      ]
+    },
+    {
+      "id": 8,
+      "name": "gltf-scene-spawning",
+      "prompt": "In Bevy 0.19, `commands.spawn(SceneRoot(asset_server.load(\"hero.glb#Scene0\")))` no longer compiles — SceneRoot isn't found. How do I spawn a glTF scene now?",
+      "expected_behavior": [
+        "Explains that 0.19 renamed the old scene crate bevy_scene -> bevy_world_serialization (the bevy_scene name now hosts the new BSN system).",
+        "Gives the fix: commands.spawn(WorldAssetRoot(asset_server.load(\"hero.glb#Scene0\"))).",
+        "Does not suggest BSN / bsn! / spawn_scene as the glTF spawning path (glTF is not ported to BSN yet).",
+        "May correctly mention related renames (DynamicScene -> DynamicWorld) or that direct material sub-asset loads now yield Handle<GltfMaterial>, without fabricating a /std suffix or other unverified API."
+      ]
+    },
+    {
+      "id": 9,
+      "name": "text-input-widget",
+      "prompt": "I need a simple text entry field in my Bevy 0.19 game UI — a player-name input. What's the recommended way to do this in 0.19?",
+      "expected_behavior": [
+        "Recommends the EditableText widget (new first-class text input in 0.19), spawned as a component on a Node entity.",
+        "Mentions it integrates with the InputFocus resource, and that InputFocus fields are private — use get()/set(entity, FocusCause::...)/clear().",
+        "Mentions reading the value via editable.value() and/or the TextEditChange event, and that bevy_ui_widgets is in default features now (no experimental feature flag needed).",
+        "May mention FeathersTextInput as the themed alternative, or TabNavigationPlugin/TabIndex for focus — without fabricating APIs.",
+        "Does not hand-roll keyboard-event parsing as the primary recommendation when EditableText exists."
+      ]
+    },
+    {
+      "id": 10,
+      "name": "bsn-scene-composition",
+      "prompt": "I'm building a settings menu in Bevy 0.19 and heard about the new bsn! scene system. How do I define a reusable button widget and compose a small menu from it, and how do I get it into the world?",
+      "expected_behavior": [
+        "Uses the bsn! macro to define scenes, with reusable scene fragments as functions returning impl Scene (e.g. fn button(label: &str) -> impl Scene).",
+        "Composes children with Children [ ... ] and attaches behavior with on(|e: On<...>, ...| { ... }) observers inline.",
+        "Spawns the scene with commands.spawn_scene(...) / world.spawn_scene(...) (or the fn.spawn() startup-system idiom) — NOT via a SceneRoot/WorldAssetRoot component (those are for the old/glTF system).",
+        "Does not claim .bsn files can be loaded yet, and does not claim glTF uses BSN — both are explicitly not ready in 0.19.",
+        "Does not fabricate BSN syntax; patches, :fn inheritance (arg-less), and @SceneComponent { @prop } usage (if shown) match the real macro."
+      ]
+    },
+    {
+      "id": 11,
+      "name": "light-shadow-fields",
+      "prompt": "After upgrading my Bevy game to 0.19, `PointLight { shadows_enabled: true, ..default() }` no longer compiles — no field `shadows_enabled`. What changed?",
+      "expected_behavior": [
+        "Explains that 0.19 renamed shadows_enabled -> shadow_maps_enabled on PointLight (and DirectionalLight/SpotLight), because lights now also support contact shadows.",
+        "Gives the fix: PointLight { shadow_maps_enabled: true, ..default() }.",
+        "May correctly mention the new contact_shadows_enabled field (and that contact shadows need a ContactShadows component on the camera) without fabricating other APIs.",
+        "Does not suggest reverting Bevy or invent an unrelated fix."
       ]
     }
   ]

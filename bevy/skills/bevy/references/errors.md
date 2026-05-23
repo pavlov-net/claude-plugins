@@ -102,6 +102,8 @@ app.set_error_handler(warn);
 
 **Library plugins must never call `set_error_handler`.** It's an application-level policy. A library that overrides it surprises every consumer.
 
+(0.19 renamed the underlying handler-of-last-resort resource `DefaultErrorHandler` → `FallbackErrorHandler`, and the method `default_error_handler` → `fallback_error_handler`. `App::set_error_handler` is unchanged. A deprecated `DefaultErrorHandler` alias eases migration for one release.)
+
 ## Per-call severity
 
 When most errors should panic but one specific call site should warn (or vice versa), override at the `?`:
@@ -110,7 +112,7 @@ When most errors should panic but one specific call site should warn (or vice ve
 use bevy::prelude::*;
 
 fn lookup(query: Query<&Camera>) -> Result {
-    let camera = query.single().with_severity(Severity::Warn)?;
+    let camera = query.single().with_severity(Severity::Warning)?;
     info!(?camera);
     Ok(())
 }
@@ -129,7 +131,7 @@ fn lookup(query: Query<&Camera>) -> Result {
 }
 ```
 
-`Severity` variants: `Panic`, `Error`, `Warn`, `Info`, `Debug`, `Trace`, `Ignore`.
+`Severity` variants: `Panic`, `Error`, `Warning`, `Info`, `Debug`, `Trace`, `Ignore`. (The variant is `Warning`; the global-handler preset *function* is `warn`.)
 
 ## Recoverable failures via match / let-else
 
@@ -207,15 +209,23 @@ fn use_assets(assets: Option<Res<EnemyAssets>>) {
 
 `Res<T>` (without `Option`) panics if `T` isn't inserted — useful when you've gated the system behind a `run_if(resource_exists::<T>)` so the panic is genuinely impossible.
 
-If you're writing a custom `SystemParam` that may fail validation, implement `validate_param`:
+If you're writing a custom `SystemParam` that may fail validation: in 0.19 the separate `validate_param` method was **removed** and folded into `get_param`, which now returns `Result<Self::Item, SystemParamValidationError>`. Do your validation there and return the error instead of the item:
 
 ```rust
-impl SystemParam for MyParam {
-    fn validate_param(/* ... */) -> Result<(), SystemParamValidationError> {
-        // Return Err to skip the system silently, or build a panic message.
+unsafe impl SystemParam for MyParam<'_> {
+    // ...
+    unsafe fn get_param<'w, 's>(/* ... */)
+        -> Result<Self::Item<'w, 's>, SystemParamValidationError>
+    {
+        if !is_valid(state, world) {
+            return Err(SystemParamValidationError::skipped::<Self>("not ready"));
+        }
+        Ok(MyParam { /* ... */ })
     }
 }
 ```
+
+Use `SystemParamValidationError::skipped::<Self>(msg)` to silently skip the system (like `Single` with no match) or `::invalid::<Self>(msg)` to route to the error handler. The validation now happens as part of fetching the data, so `SystemState::get`/`get_mut` also return a `Result` you must `.unwrap()` or handle.
 
 ## Piping handlers
 

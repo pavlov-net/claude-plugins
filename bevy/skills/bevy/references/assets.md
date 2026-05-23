@@ -1,8 +1,9 @@
 # Assets
 
 ## Contents
-- Loading — `AssetServer::load`, asset path resolution
-- The handle/asset distinction — mutate handle (one entity) vs mutate asset (everyone)
+- Loading — `AssetServer::load`, `load_builder` (0.19), asset path resolution
+- glTF and scenes — `bevy_world_serialization` rename, `WorldAssetRoot`, `GltfMaterial` (0.19)
+- The handle/asset distinction — mutate handle (one entity) vs mutate asset (everyone), `AssetMut` (0.19)
 - Render-component wrappers — `MeshMaterial3d`, `Mesh3d`, `Sprite::from_image`
 - Reference counting — handles drop = asset unloads; the canonical pitfall
 - Preload pattern — hold handles in resources to prevent unload churn
@@ -32,6 +33,51 @@ The path is relative to the `assets/` directory next to your `Cargo.toml`. Overr
 
 Calls to `load(same_path)` are deduplicated by `AssetPath` — you get the same handle, no second load.
 
+In 0.19 the many specialized load variants (`load_acquire`, `load_untyped`, `load_with_settings`, `load_acquire_override_with_settings`, …) were collapsed into one builder. `load(path)` is the convenience path; reach for `load_builder()` for anything fancier (they're all deprecated in favor of it):
+
+```rust
+let handle = asset_server
+    .load_builder()
+    .with_settings(settings)
+    .override_unapproved()
+    .load("level.ron");
+```
+
+Inside a custom loader, the equivalent is `load_context.load_builder()` (replacing the old `LoadContext::loader()`); `context.load_builder().load(path)` for a dependency, `.load_untyped(path)` / `.load_value(path)` for the immediate/untyped variants.
+
+`AssetPath` got a couple of signature changes too: `get_full_extension()` now returns `Option<&str>` (was `Option<String>` — add `.map(ToString::to_string)` if you need an owned copy), and `resolve`/`resolve_embed` now take `&AssetPath` (the `&str` forms are `resolve_str`/`resolve_embed_str`).
+
+## glTF and scenes (`bevy_world_serialization`)
+
+In 0.19 the *old* scene system was renamed to `bevy_world_serialization` (`bevy::world_serialization`) to make room for the new BSN scene system under the `bevy_scene` / `bevy::scene` name (see `references/bsn.md`). The old system stays because it still owns two things BSN can't do yet: round-trip `World` serialization, and the glTF scene loader.
+
+The change most projects hit is **spawning glTF scenes** — `SceneRoot` is now `WorldAssetRoot`:
+
+```rust
+// 0.18
+commands.spawn(SceneRoot(asset_server.load("models/hero.glb#Scene0")));
+
+// 0.19
+commands.spawn(WorldAssetRoot(asset_server.load("models/hero.glb#Scene0")));
+```
+
+`WorldAssetRoot` (and `DynamicWorld`, `DynamicWorldRoot`, `WorldAsset`, `DynamicWorldBuilder`, `WorldFilter`, `WorldInstanceSpawner`) are in the prelude. The full rename, for code that touches the serialization API directly:
+
+| 0.18 | 0.19 |
+| --- | --- |
+| `Scene` (the `World` wrapper asset) | `WorldAsset` |
+| `SceneRoot` | `WorldAssetRoot` |
+| `DynamicScene` | `DynamicWorld` |
+| `DynamicSceneBuilder` | `DynamicWorldBuilder` |
+| `DynamicSceneRoot` | `DynamicWorldRoot` |
+| `SceneFilter` | `WorldFilter` |
+| `SceneSpawner` | `WorldInstanceSpawner` |
+| `ScenePlugin` (old) | `WorldSerializationPlugin` |
+
+`DynamicWorldBuilder::from_world` and `DynamicWorld::from_world_asset` now require an explicit `&TypeRegistry` argument (read it from `world.resource::<AppTypeRegistry>()`), rather than pulling it out of the world being serialized.
+
+glTF material sub-assets changed too: `asset_server.load("hero.glb#Material0")` now loads a `Handle<GltfMaterial>` — the glTF representation of the material — rather than a `Handle<StandardMaterial>`. This decouples `bevy_gltf` from the rendering stack. Spawning a whole scene via `WorldAssetRoot` still wires up rendering materials automatically; only direct material-handle loads see the new type. (`UvChannel` also moved from `bevy_pbr` to `bevy_mesh`.)
+
 ## The handle/asset distinction
 
 When you "change a sprite," there are two different operations:
@@ -50,13 +96,30 @@ Only this entity changes. Other entities pointing at the original asset are unaf
 
 ```rust
 fn fade(sprite: Single<&Sprite, With<Player>>, mut images: ResMut<Assets<Image>>) {
-    if let Some(image) = images.get_mut(&sprite.image) {
+    if let Some(mut image) = images.get_mut(&sprite.image) {
         // ... edit pixels ...
     }
 }
 ```
 
 *Every* entity using this asset is affected — including ones in totally unrelated parts of your game. Use this deliberately, usually only for procedural content (e.g., a dynamically-rendered minimap).
+
+In 0.19, `Assets::get_mut` returns an `AssetMut<A>` smart pointer (like `Mut<T>`) rather than a bare `&mut A` — so the binding needs `mut`. It fires `AssetEvent::Modified` only when you actually deref-mutate, so guarding writes matters: for materials, a spurious `Modified` triggers re-extraction to the render world every frame, a measurable cost. Check before writing:
+
+```rust
+fn tint(
+    query: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    target: Res<TargetColor>,
+) {
+    for handle in &query {
+        let Some(mut material) = materials.get_mut(handle) else { continue };
+        if material.base_color != target.0 {       // guard: only mutate (and emit Modified) on real change
+            material.base_color = target.0;
+        }
+    }
+}
+```
 
 ## Render-component wrappers
 
@@ -188,7 +251,7 @@ The canonical loading screen pattern: define an `AssetState` (or similar) state,
 Enable the `file_watcher` feature:
 
 ```toml
-bevy = { version = "0.18", features = ["file_watcher"] }
+bevy = { version = "0.19", features = ["file_watcher"] }
 ```
 
 Or run with the flag:
@@ -286,7 +349,8 @@ fn build(app: &mut App) {
 Then load with the `embedded://` URL scheme:
 
 ```rust
-let handle: Handle<Scene> = asset_server.load("embedded://my_crate/avatar.glb#Scene0");
+let handle: Handle<WorldAsset> = asset_server.load("embedded://my_crate/avatar.glb#Scene0");
+commands.spawn(WorldAssetRoot(handle));   // 0.19: was Handle<Scene> / SceneRoot
 ```
 
 `#Scene0` is a glTF subasset path — same syntax as for filesystem glTFs.
@@ -298,7 +362,7 @@ Combine with `embedded_watcher` for hot reload from the source files during deve
 The `http`/`https` features let `asset_server.load("https://example.com/icon.png")` work over the network:
 
 ```toml
-bevy = { version = "0.18", features = ["http", "https"] }
+bevy = { version = "0.19", features = ["http", "https"] }
 ```
 
 On native, this uses the `ureq` crate. On wasm, it uses the browser's fetch API.
@@ -367,6 +431,21 @@ Configure per-asset processing via meta files (`my_asset.png.meta`):
 ```
 
 Processed assets are cached. The processor runs once and the result is reused for subsequent loads. Useful for expensive transforms — image resizing, mesh optimization, audio compression.
+
+## Saving assets at runtime (0.19)
+
+`AssetSaver` used to be reachable only from inside the processing pipeline. 0.19 adds `save_using_saver` so you can save *any* asset to disk at runtime — a procedurally generated mesh, a baked lightmap, in-editor output:
+
+```rust
+use bevy::asset::saver::{save_using_saver, SavedAsset};
+
+let saved = SavedAsset::from_asset(&my_asset);          // borrows, doesn't own
+save_using_saver(asset_server.clone(), &MySaver, &"out/baked.ext".into(), saved, &()).await?;
+```
+
+`save_using_saver` is async — spawn it on `IoTaskPool::get()`. For assets with sub-assets, build the `SavedAsset` with `SavedAssetBuilder` and `add_labeled_asset_with_new_handle`. Note that in 0.19 `SavedAsset` carries two lifetimes and `AssetSaver::save` takes an extra `asset_path: AssetPath` argument — update custom `AssetSaver` impls accordingly.
+
+To round-trip **asset handles** through reflection-based serialization (e.g. world serialization), the asset must be properly reflected — `#[derive(Asset, Reflect)] #[reflect(Asset)]`, not just `#[derive(Asset, TypePath)]` — and registered. The `HandleSerializeProcessor`/`HandleDeserializeProcessor` store a handle's asset path on save and reload from it on load; pass them to `TypedReflectSerializer::with_processor` if you need the same behavior in your own pipeline.
 
 ## Render-asset usage
 
