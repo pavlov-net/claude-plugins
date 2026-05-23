@@ -1,18 +1,45 @@
-# Bevy 0.16 → 0.17 → 0.18 API rename cheatsheet
+# Bevy 0.16 → 0.17 → 0.18 → 0.19 API rename cheatsheet
 
 ## Contents
-- ECS communication (Event/Message/Observer split — 0.17)
-- ECS data (required components, material wrappers, color arithmetic — 0.17)
+- 0.18 → 0.19 (the latest hop — read first if you're upgrading from 0.18)
+- ECS communication (Event/Message/Observer split — 0.17; `Replace`→`Discard` — 0.19)
+- ECS data (required components, material wrappers, color arithmetic — 0.17; resources-as-components — 0.19)
 - Children / hierarchy (`detach_*` rename, `children!` macro limit)
-- Rendering and assets (`RenderTarget`, `AmbientLight`, `Atmosphere`, Aabb)
-- Schedules and states (state set re-fire, system set naming, `RenderStartup`)
-- UI (`Val` helpers, `UiTransform`, `BorderRadius` folding)
-- Resources (lifetime requirements, `BindGroupLayoutDescriptor`)
-- Cargo features (collections, picking-backend renames)
-- Errors and entities (0.18 internal — `EntityIndex`, allocator rework)
+- Rendering and assets (`RenderTarget`, `AmbientLight`, `Atmosphere`, Aabb; lights, scenes, text — 0.19)
+- Schedules and states (state set re-fire, system set naming, `RenderStartup`, `set_executor` — 0.19)
+- UI (`Val` helpers, `UiTransform`, `BorderRadius` folding; text `FontSource`/`FontSize`, widgets — 0.19)
+- Resources (lifetime requirements; resources-as-components — 0.19)
+- Cargo features (collections, picking-backend renames; `audio`/`ui` no longer implied — 0.19)
+- Errors and entities (`EntityIndex`, allocator rework — 0.18; `FallbackErrorHandler`, `validate_param` — 0.19)
 - Search aids — common error messages and what they mean
 
 Use this when modernizing existing code or interpreting compile errors that look version-mismatched. Symptom alongside the fix.
+
+## 0.18 → 0.19 (the latest hop)
+
+| 0.18 | 0.19 | Notes |
+| --- | --- | --- |
+| `On<Replace, T>`, `on_replace`, `#[component(on_replace=...)]` | `On<Discard, T>`, `on_discard`, `#[component(on_discard=...)]` | Lifecycle event `Replace` renamed `Discard`. |
+| `#[derive(Component, Resource)]` | `#[derive(Resource)]` (implements both) | `Resource: Component` now; co-deriving is a duplicate impl. |
+| `#[reflect(Resource)]` machinery | `ReflectComponent` | `ReflectResource` is a marker only. |
+| `init_non_send_resource` / `insert_non_send_resource` | `init_non_send` / `insert_non_send` | Non-send "resources" → non-send "data". |
+| `TextFont { font: handle, font_size: 24.0 }` | `TextFont { font: handle.into(), font_size: FontSize::Px(24.0) }` | `font`→`FontSource`, `font_size`→`FontSize`. New `weight`/`width`/`style`, `LetterSpacing`. |
+| `TextLayout::new_with_justify(...)` | `TextLayout::justify(...)` | Also `new_with_linebreak`→`linebreak`, `new_with_no_wrap`→`no_wrap`. |
+| `Font::try_from_bytes(bytes)` | `Font::from_bytes(bytes, "Family")` | No longer `Result`; needs a family name. |
+| `experimental_bevy_ui_widgets` feature | `bevy_ui_widgets` | Now in `ui`/default features; `UiWidgetsPlugins` in `DefaultPlugins`. |
+| `experimental_bevy_feathers` feature | `bevy_feathers` | `FeathersPlugin` → `FeathersCorePlugin`. |
+| `CoreScrollbarThumb`, `CoreScrollbarDragState`, `CoreSliderDragState` | `ScrollbarThumb`, `ScrollbarDragState`, `SliderDragState` | `Core` prefix dropped from widget components. |
+| `input_focus.0 = Some(e)` | `input_focus.set(e, FocusCause::Navigated)` | Fields private; `get()`/`set(e, cause)`/`clear()`. |
+| `SceneRoot(...)`, `DynamicScene`, `bevy::scene::*` (old) | `WorldAssetRoot(...)`, `DynamicWorld`, `bevy::world_serialization::*` | Old scene crate renamed; `bevy::scene` is now BSN. |
+| `assets.get_mut(&h) -> Option<&mut A>` | `-> Option<AssetMut<A>>` | Bind `mut`; only fires `Modified` on real mutation. |
+| `asset_server.load_acquire/load_untyped/load_with_settings(...)` | `asset_server.load_builder()....load(path)` | Old variants deprecated. |
+| `PointLight { shadows_enabled }` | `PointLight { shadow_maps_enabled }` | Same for `DirectionalLight`/`SpotLight`; new `contact_shadows_enabled`. |
+| `Atmosphere::earthlike(m)` on camera | `Atmosphere::earth(m)` as its own entity | Moved to `bevy::light`; `AtmosphereSettings` stays on camera. |
+| `Skybox { image: handle }` | `Skybox { image: Some(handle) }` | `image` is `Option`; moved to `bevy::light`. |
+| custom `SystemParam::validate_param` | (removed) — validate inside `get_param` (returns `Result`) | `SystemState::get` now returns `Result`. |
+| `DefaultErrorHandler` resource | `FallbackErrorHandler` | `set_error_handler` unchanged. |
+| `ExecutorKind` / `Schedule::set_executor_kind` | `Schedule::set_executor(SingleThreadedExecutor::new())` etc. | `default_executor()` for the default. |
+| `RenderGraph` `Node`/`add_render_graph_node` | render systems in `Core3d`/`Core2d` schedules | See `references/rendering.md`. |
 
 ## ECS communication (the big one — 0.17)
 
@@ -23,7 +50,7 @@ Use this when modernizing existing code or interpreting compile errors that look
 | `Events<E>` resource | `Messages<M>` resource | Same double-buffer semantics. |
 | `app.add_event::<E>()` | `app.add_message::<M>()` | For buffered communication. |
 | `Trigger<E>` parameter | `On<E>` parameter | Same role, shorter name. |
-| `OnAdd` | `Add` | Lifecycle event. Same for `OnInsert/OnReplace/OnRemove/OnDespawn` → `Insert/Replace/Remove/Despawn`. |
+| `OnAdd` | `Add` | Lifecycle event. Same for `OnInsert/OnRemove/OnDespawn` → `Insert/Remove/Despawn`. `OnReplace` → `Replace` in 0.17, then → `Discard` in 0.19 (see the 0.18→0.19 table). |
 | `world.trigger_targets(E, entity)` | `commands.trigger(E { entity, .. })` where `E: EntityEvent` | Targeting is now baked into the event type. |
 | `commands.add_observer(\|t: Trigger<E>\| ...)` | `commands.add_observer(\|e: On<E>\| ...)` | Name the binding after the *event*, not the trigger. |
 
@@ -96,6 +123,7 @@ If you see `MyEvent is not a Message` or `method 'send' not found for MessageWri
 | Old | New | Notes |
 | --- | --- | --- |
 | Hand-listing 30+ Bevy features | `bevy = { default-features = false, features = ["3d", "ui"] }` | (0.18) Top-level collections: `2d`, `3d`, `ui`, `audio`, `dev`. Plus mid-level `2d_api`, `3d_api`, `default_app`, `default_platform`. |
+| `["3d"]` implicitly gave you audio + UI | list `["3d", "ui", "audio"]` explicitly | (0.19) `audio`/`ui` no longer implied by `2d`/`3d`; `audio` is its own default; `bevy_window`/`bevy_input_focus`/`custom_cursor` left `default_app`; Android activity backend no longer default. |
 | `bevy_sprite_picking_backend` | `sprite_picking` | (0.18) Feature renamed for consistency. Same for `bevy_ui_picking_backend` → `ui_picking`, `bevy_mesh_picking_backend` → `mesh_picking`. |
 | `animation` feature | `gltf_animation` | (0.18) Renamed to make the scope clear. |
 
@@ -119,7 +147,14 @@ When a Bevy compile error surfaces in old code, these phrases usually mean a ver
 - `Handle<X> is not a Component` — needs the `MeshMaterial3d` etc. wrapper (0.17)
 - `cannot multiply Color by f32` — color arithmetic removed (0.17)
 - `method 'send' not found for MessageWriter` — old `EventWriter::send` replaced by `MessageWriter::write` (0.17)
-- `next_state.set` re-firing transitions — same-state re-fire change (0.18)
+- `next_state.set` re-firing transitions — same-state re-fire change (0.18; extended to `DespawnOnEnter`/`DespawnOnExit` in 0.19)
 - `field 'target' not found on Camera` — `RenderTarget` moved off `Camera` (0.18)
 - `enable_prepass` not found on `MaterialPlugin` — moved to `Material` trait method (0.18)
-- `Atmosphere: !Default` — `ScatteringMedium` asset required (0.18)
+- `Atmosphere: !Default` / `no method earthlike` — `ScatteringMedium` asset required (0.18); `Atmosphere` is an entity, `earthlike`→`earth` (0.19)
+- `cannot find type Replace` / `on_replace` rejected — lifecycle `Replace`→`Discard` (0.19)
+- `conflicting implementations of trait Component` on a resource — `#[derive(Component, Resource)]` no longer valid; `Resource: Component` (0.19)
+- expected `FontSource`/`FontSize`, found `Handle<Font>`/`f32` — text migrated to parley (0.19)
+- `cannot find SceneRoot`/`DynamicScene` — old scene crate is now `bevy_world_serialization`; use `WorldAssetRoot` (0.19)
+- `field '.0' of InputFocus is private` — use `get()`/`set(e, FocusCause)`/`clear()` (0.19)
+- `no field shadows_enabled` on a light — renamed `shadow_maps_enabled` (0.19)
+- `validate_param is not a member of trait SystemParam` — merged into `get_param` returning `Result` (0.19)

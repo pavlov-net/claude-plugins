@@ -6,7 +6,7 @@
 - Messages — `MessageWriter`/`MessageReader`, registration, lifetime
 - Events + Observers — `On<E>` parameter, `world.trigger`/`commands.trigger`
 - EntityEvents — entity-targeted events, `#[event_target]`, immutability in 0.18
-- Component lifecycle observers — `Add`, `Insert`, `Replace`, `Remove`, `Despawn`
+- Component lifecycle observers — `Add`, `Insert`, `Discard`, `Remove`, `Despawn` (0.19 renamed `Replace` → `Discard`)
 - Component hooks — `#[component(on_add = ...)]` direct registration; hook vs observer
 - Common patterns — hookup-on-spawn, damage batching, propagation
 
@@ -115,7 +115,7 @@ Notes:
 - Observers can take any system params after the `On<E>` (Queries, Resources, Commands, MessageWriter, etc.) — same as a regular system.
 - `world.trigger(E { .. })` runs the event *immediately*; the observer handler executes before `trigger` returns.
 - `commands.trigger(E { .. })` defers the trigger to the next command flush. Inside an observer, `commands.trigger(...)` adds to the queue and runs at flush time, recursively if needed.
-- Observers can `.run_if(...)` like systems. Multiple `.run_if` calls AND together.
+- Observers can `.run_if(...)` like systems (0.19). Works with `add_observer`, entity `.observe(...)`, and the `Observer` builder; multiple `.run_if` calls AND together. `app.add_observer(on_damage.run_if(|paused: Res<GamePaused>| !paused.0))`.
 
 Events default to a `GlobalTrigger` (untargeted). They cannot be triggered with an entity target unless you derive `EntityEvent` instead.
 
@@ -216,11 +216,11 @@ Five lifecycle events, observable on any component:
 
 - **`Add`** — fires when a component is added to an entity that didn't already have it.
 - **`Insert`** — fires when a component is added, regardless of whether it was already there. (`Insert` is a superset of `Add`.)
-- **`Replace`** — fires when a component is removed *or* replaced by a new value of the same type.
+- **`Discard`** — fires when a component is removed *or* replaced by a new value of the same type. **Renamed from `Replace` in 0.19** (the `OnReplace`/`Replace` doc aliases remain for discoverability).
 - **`Remove`** — fires when a component is removed and not replaced. Runs *before* the component is actually removed.
 - **`Despawn`** — fires for each component on an entity when the entity is despawned.
 
-Ordering: `Add` runs before `Insert`. `Replace` runs before `Remove`. `Despawn` runs last.
+Ordering: `Add` runs before `Insert`. `Discard` runs before `Remove`. `Despawn` runs last.
 
 Observe via the `On<Lifecycle, Component>` form:
 
@@ -338,4 +338,4 @@ commands.entity(avatar).observe(|done: On<AnimationFinished>, /* ... */| { /* ..
 commands.add_observer(|done: On<AnimationFinished>| { /* ... */ });
 ```
 
-**Custom event triggers**: the `Event::Trigger` associated type is the extension point. The default triggers (`GlobalTrigger`, `EntityTrigger`, `PropagateEntityTrigger`, `EntityComponentsTrigger`) cover almost everything. Implement `Trigger<E>` for an exotic case (e.g., events that fan out to all entities matching some predicate). Rare in application code; common in framework code.
+**Custom event triggers**: the `Event::Trigger` associated type is the extension point. The default triggers (`GlobalTrigger`, `EntityTrigger`, `PropagateEntityTrigger`, `EntityComponentsTrigger`) cover almost everything. Implement `Trigger<E>` for an exotic case (e.g., events that fan out to all entities matching some predicate). Rare in application code; common in framework code. (0.19: `EntityComponentsTrigger` gained `old_archetype`/`new_archetype` fields, so destructuring its `components` field now needs a trailing `..`.)

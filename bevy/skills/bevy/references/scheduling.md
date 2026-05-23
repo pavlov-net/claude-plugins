@@ -196,7 +196,7 @@ fn start_game(mut next: ResMut<NextState<AppState>>) {
 
 The transition isn't immediate. `NextState` is queued and applied when the `StateTransition` schedule runs (after `PreUpdate`, before `FixedMain` and `Update`). Systems running later in the same frame still see the old state.
 
-In 0.18, `next_state.set(X)` re-fires `OnEnter`/`OnExit` even if the state was already `X`. If you want the old "skip if equal" behavior:
+In 0.18, `next_state.set(X)` re-fires `OnEnter`/`OnExit` even if the state was already `X`. **In 0.19 this consistency was extended to `DespawnOnEnter`/`DespawnOnExit`** — they now also trigger on same-state transitions (a bug where they didn't was fixed). If you want the old "skip if equal" behavior (no transition schedules, no scoped despawns):
 
 ```rust
 next_state.set_if_neq(AppState::InGame);
@@ -242,7 +242,7 @@ When the state exits, the entity (and its `linked_spawn` children) despawns auto
 - `DespawnOnEnter(State::X)` — despawn when entering.
 - `DespawnWhen(condition)` — despawn when an arbitrary state predicate matches.
 
-This pattern eliminates a huge class of "I forgot to clean up" bugs. Use it for menus, HUD elements, level entities — anything tied to a specific state.
+This pattern eliminates a huge class of "I forgot to clean up" bugs. Use it for menus, HUD elements, level entities — anything tied to a specific state. (For the 0.19 same-state-transition behavior, see the `set_if_neq` note above.)
 
 ### Sub-states
 
@@ -407,7 +407,7 @@ app.add_systems(Update, slow_thing.run_if(on_timer(Duration::from_secs(5))));
 
 `Stopwatch` is the related "elapsed time, no duration" type for things that need to count up but not finish.
 
-### DelayedCommands
+### DelayedCommands (0.19)
 
 For "do this thing in 2 seconds":
 

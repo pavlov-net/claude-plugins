@@ -1,20 +1,20 @@
 # Common pitfalls (and what to do instead)
 
 ## Contents
-- Communication — polling for spawn-time setup; Event/Message confusion; `trigger_targets` removal; `Trigger<E>` rename
+- Communication — polling for spawn-time setup; Event/Message confusion; `trigger_targets` removal; `Trigger<E>` rename; `Replace`→`Discard` (0.19)
 - Change detection — mutable deref always marks changed; `RemovedComponents` in `FixedUpdate`
 - Components and bundles — `Handle<T>` not a Component; bundle arity; `children!` macro limit; `clear_children` rename
-- Schedules and states — `set` re-fires `OnEnter`; `add_event` vs `add_message`; manual `register_type`; system ordering source-of-truth
-- Resources and lifetimes — non-static lifetime forbidden; `AmbientLight` split
-- Rendering — `Camera::target` move; `Atmosphere::default()`; `MaterialPlugin` field-to-method; auto-Aabb; mesh `try_*` methods
+- Schedules and states — `set` re-fires `OnEnter`/`DespawnOnExit`; `add_event` vs `add_message`; manual `register_type`; system ordering source-of-truth
+- Resources and lifetimes — resources-as-components / no `Component+Resource` co-derive (0.19); broad-query conflicts; non-static lifetime forbidden; `AmbientLight` split
+- Rendering — `Camera::target` move; `Atmosphere` now an entity (0.19); light `shadow_maps_enabled` (0.19); `MaterialPlugin` field-to-method; auto-Aabb; mesh `try_*` methods
 - Color arithmetic — direct ops removed
-- Assets — handle drop = unload; asset path resolution; `LoadContext::asset_path` removal
-- UI — `Val::Px(...)` verbosity; `Transform` on UI nodes; non-text picking (0.18)
-- Cargo features — additive surprise; collection migration; picking-backend renames
+- Assets — handle drop = unload; `SceneRoot`→`WorldAssetRoot` (0.19); `get_mut`→`AssetMut` (0.19); asset path resolution; `LoadContext::asset_path` removal
+- UI — `Val::Px(...)` verbosity; `Transform` on UI nodes; text `FontSource`/`FontSize` (0.19); `InputFocus` fields private (0.19); widgets/Feathers de-experimentalized (0.19); non-text picking
+- Cargo features — additive surprise; collection migration; `audio`/`ui` no longer implied (0.19); picking-backend renames
 - Misc — `cargo clean` reflexes; same-system `next_state`/spawn ordering; reflection generics
 - Performance traps — per-frame allocation; asset content cloning; shipping `dynamic_linking`
 
-Patterns that look reasonable but bite later, or 0.16/0.17-era idioms that no longer work in 0.18. Each one has the symptom alongside the fix.
+Patterns that look reasonable but bite later, or 0.16/0.17/0.18-era idioms that no longer work in 0.19. Each one has the symptom alongside the fix.
 
 ## Communication
 
@@ -77,6 +77,14 @@ commands.trigger(Click { entity: target });
 **Cause**: Renamed to `On<E>` in 0.17.
 
 **Fix**: `On<E>` instead of `Trigger<E>`. Bind name should match the event semantics (e.g., `click: On<Click>`) rather than `trigger`.
+
+### `On<Replace, T>` / `on_replace` not found (0.19)
+
+**Symptom**: `cannot find type Replace`, or `#[component(on_replace = ...)]` rejected.
+
+**Cause**: 0.19 renamed the lifecycle event `Replace` → `Discard` (it fires when a component is removed *or* replaced by a new value).
+
+**Fix**: `On<Discard, T>`, `ComponentHooks::on_discard`, `#[component(on_discard = ...)]`. The `Replace`/`OnReplace` doc-aliases remain only for search.
 
 ## Change detection
 
@@ -234,6 +242,30 @@ If you're on a platform without `inventory` support, use the static-registration
 
 ## Resources and lifetimes
 
+### `#[derive(Component, Resource)]` on one type doesn't compile (0.19)
+
+**Symptom**: "conflicting implementations of trait `Component`".
+
+**Cause**: 0.19 made `Resource` a subtrait of `Component`, and `#[derive(Resource)]` now *also* generates the `Component` impl. Deriving both gives two `Component` impls.
+
+**Fix**: Pick one, or split into two types. If you only ever used it as a resource, drop the `Component` derive. If you genuinely need both a per-entity component and a singleton resource, make `FooComponent` and `FooResource`.
+
+### `#[reflect(Resource)]` no longer carries reflection data (0.19)
+
+**Symptom**: Reflection-driven code (BRP, `bevy_world_serialization`) can't find/operate on a resource.
+
+**Cause**: `ReflectResource` became a zero-sized marker in 0.19; the real machinery lives in `ReflectComponent` (since resources are components).
+
+**Fix**: Use `#[reflect(Component)]` / `ReflectComponent` for resources too. (You can also drop `#[derive(MapEntities)]` from resources — entity mapping is automatic for components.)
+
+### Broad `Query<EntityMut>` conflicts with `Res<T>` (0.19)
+
+**Symptom**: A system that worked before now fails to build with an access conflict between a catch-all query and a resource.
+
+**Cause**: Resources are entities now, so broad queries (`Query<Entity>`, `Query<EntityMut>`, `Query<EntityRef>`, `Query<Option<&T>>`) match resource entities and can collide with `Res`/`ResMut`/`NonSend` in the same system.
+
+**Fix**: Exclude resource entities: `Query<EntityMut, Without<IsResource>>` (or `Without<TheSpecificResource>`).
+
 ### `#[derive(Resource)] struct Foo<'a>` doesn't compile
 
 **Symptom**: 0.18 onward refuses to derive `Resource` for types with non-static lifetimes.
@@ -273,23 +305,33 @@ commands.spawn((
 ));
 ```
 
-### `Atmosphere::default()` doesn't exist
+### `Atmosphere::default()` / `Atmosphere::earthlike` / `Atmosphere` on the camera
 
-**Symptom**: `Atmosphere does not implement Default`.
+**Symptom**: `Atmosphere does not implement Default`; `no method earthlike`; or atmosphere doesn't render when added to the camera.
 
-**Cause**: 0.18 generalized atmospheric scattering to use a `ScatteringMedium` asset.
+**Cause**: 0.18 generalized atmospheric scattering to require a `ScatteringMedium` asset. **0.19 moved `Atmosphere` to `bevy_light`, made it a standalone entity (not a camera component), and renamed `earthlike` → `earth`** (and `bottom_radius`/`top_radius` → `inner_radius`/`outer_radius`). `AtmosphereSettings` stays on the camera and is what enables atmosphere rendering for that view.
 
-**Fix**:
+**Fix** (0.19):
 
 ```rust
+use bevy::light::{atmosphere::ScatteringMedium, Atmosphere};
+use bevy::pbr::AtmosphereSettings;
+
 fn setup(mut commands: Commands, mut media: ResMut<Assets<ScatteringMedium>>) {
-    let medium = media.add(ScatteringMedium::default());
-    commands.spawn((
-        Camera3d::default(),
-        Atmosphere::earthlike(medium),
-    ));
+    // Atmosphere is its own entity now.
+    commands.spawn(Atmosphere::earth(media.add(ScatteringMedium::earth(256, 256))));
+    // The camera opts in via AtmosphereSettings.
+    commands.spawn((Camera3d::default(), AtmosphereSettings::default()));
 }
 ```
+
+### `PointLight { shadows_enabled: true }` field not found (0.19)
+
+**Symptom**: `no field shadows_enabled on PointLight` (also `DirectionalLight`, `SpotLight`).
+
+**Cause**: 0.19 renamed `shadows_enabled` → `shadow_maps_enabled` (because lights now also support *contact* shadows, with a separate `contact_shadows_enabled` field).
+
+**Fix**: Rename the field to `shadow_maps_enabled`. Set `contact_shadows_enabled: true` to add screen-space contact shadows (the camera needs a `ContactShadows` component).
 
 ### `MaterialPlugin::<M> { prepass_enabled: false, .. }` field doesn't exist
 
@@ -382,6 +424,22 @@ Then clone from the resource when spawning. Cloning a handle is cheap (refcount 
 
 For shipped builds, the `assets/` folder needs to be alongside the final binary.
 
+### `SceneRoot(...)` for glTF doesn't compile (0.19)
+
+**Symptom**: `cannot find SceneRoot` / `cannot find DynamicScene`.
+
+**Cause**: 0.19 renamed the old scene crate `bevy_scene` → `bevy_world_serialization` (the `bevy_scene` name now hosts the new BSN system).
+
+**Fix**: `WorldAssetRoot(asset_server.load("scene.gltf#Scene0"))` (was `SceneRoot`). `DynamicScene` → `DynamicWorld`, `DynamicSceneBuilder` → `DynamicWorldBuilder`, etc. All in the prelude. Direct material sub-asset loads now yield `Handle<GltfMaterial>`, not `Handle<StandardMaterial>`.
+
+### `assets.get_mut(&h)` returns the wrong type / fires Modified constantly (0.19)
+
+**Symptom**: `let Some(img) = images.get_mut(...)` won't let you mutate (`img` is not `&mut`), or a material re-extracts to the render world every frame.
+
+**Cause**: 0.19 changed `Assets::get_mut` to return an `AssetMut<A>` smart pointer (like `Mut<T>`) that emits `AssetEvent::Modified` on deref-mutation.
+
+**Fix**: Bind it `mut` (`let Some(mut img) = ...`). Guard writes so you only mutate on real change — `if mat.base_color != new { mat.base_color = new; }` — to avoid needless `Modified` events (a real cost for materials). `bypass_change_detection()` skips the event entirely.
+
 ### `LoadContext::asset_path` doesn't exist
 
 **Cause**: 0.18 removed `LoadContext::asset_path`. `LoadContext::path` now returns `AssetPath` (it used to return `Path`).
@@ -418,6 +476,30 @@ Node {
 
 **Fix**: Don't put `Transform` on UI entities. Use `Node` for layout. If you need to animate UI position, animate `Node.left`/`Node.top` (with `position_type: Absolute`) or `UiTransform` directly.
 
+### `TextFont { font: handle, font_size: 24.0 }` doesn't compile (0.19)
+
+**Symptom**: type mismatch on `font` (expected `FontSource`, found `Handle<Font>`) or `font_size` (expected `FontSize`, found `f32`).
+
+**Cause**: 0.19 migrated text to `parley`; `font` is now `FontSource` and `font_size` is `FontSize`.
+
+**Fix**: `font: handle.into()` (or `FontSource::Family("…")` / `FontSource::Monospace`), `font_size: FontSize::Px(24.0)`. New `weight`/`width`/`style` fields cover variable fonts; `LetterSpacing` is its own component. `TextLayout::new_with_justify` → `TextLayout::justify`.
+
+### `input_focus.0 = Some(entity)` doesn't compile (0.19)
+
+**Symptom**: field `.0` of `InputFocus` is private.
+
+**Cause**: 0.19 made `InputFocus` fields private and added a `FocusCause`.
+
+**Fix**: `input_focus.set(entity, FocusCause::Navigated)`, `input_focus.get()`, `input_focus.clear()`. (Core `InputFocus` setup also moved from `InputDispatchPlugin` to `InputFocusPlugin`, both in `DefaultPlugins`.)
+
+### `experimental_bevy_ui_widgets` / `experimental_bevy_feathers` feature not found (0.19)
+
+**Symptom**: unknown feature, or `UiWidgetsPlugins` added twice / `FeathersPlugin` not found.
+
+**Cause**: Both graduated from experimental in 0.19. `experimental_bevy_ui_widgets` → `bevy_ui_widgets` (now in `ui`/default features and `DefaultPlugins`); `experimental_bevy_feathers` → `bevy_feathers`; `FeathersPlugin` → `FeathersCorePlugin`.
+
+**Fix**: Drop the `experimental_` prefix from feature names; remove manual `add_plugins(UiWidgetsPlugins)`/`InputDispatchPlugin` when you have `DefaultPlugins`; rename `FeathersPlugin` → `FeathersCorePlugin`. Widget components also lost the `Core` prefix (`CoreScrollbarThumb` → `ScrollbarThumb`).
+
 ### Non-text areas of `Text` no longer pickable (0.18)
 
 **Symptom**: A click handler on a `Text` node only fires when the user clicks directly on a glyph.
@@ -438,13 +520,21 @@ Node {
 
 ### Hand-listing 30+ features
 
-Not a bug, but maintenance burden. 0.18's feature collections (`3d`, `ui`, etc.) cover most use cases. Switch to:
+Not a bug, but maintenance burden. Feature collections (`3d`, `ui`, etc.) cover most use cases. Switch to:
 
 ```toml
-bevy = { version = "0.18", default-features = false, features = ["3d", "ui"] }
+bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
 ```
 
 Add specific features only when the collection is missing something. The collections are designed to be the right size for typical apps.
+
+### `audio`/`ui` missing in a non-default build (0.19)
+
+**Symptom**: After upgrading to 0.19 with `default-features = false, features = ["3d"]`, audio or UI stops working.
+
+**Cause**: 0.19 stopped having `2d`/`3d` implicitly pull in `audio` and `ui`, so you could swap those subsystems without a feature soup.
+
+**Fix**: List them: `features = ["3d", "ui", "audio"]`. (Conversely, dropping `bevy_audio` is now just leaving `audio` off.) Also: `bevy_window`/`bevy_input_focus`/`custom_cursor` left the `default_app` collection, and the Android activity backend is no longer a default — add what you need explicitly.
 
 ### Renamed feature names (0.18)
 
@@ -498,6 +588,14 @@ app.register_type::<Container<Item>>();
 ```
 
 Without this, the specific monomorphized type isn't visible to reflection.
+
+### Custom `SystemParam::validate_param` no longer exists (0.19)
+
+**Symptom**: `method validate_param is not a member of trait SystemParam`, or `SystemState::get` now returns a `Result` you didn't expect.
+
+**Cause**: 0.19 merged param validation into fetching — `validate_param` was removed and `get_param` now returns `Result<Self::Item, SystemParamValidationError>`.
+
+**Fix**: Delete `validate_param`; move its logic into `get_param`, returning `Err(SystemParamValidationError::skipped::<Self>("…"))` to skip or `::invalid::<Self>("…")` to error. Wrap the success case in `Ok(...)`. `SystemState::get`/`get_mut` now return `Result` — add `.unwrap()` or handle it.
 
 ## Performance traps
 

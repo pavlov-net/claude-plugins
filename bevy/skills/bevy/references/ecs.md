@@ -6,7 +6,7 @@
 - Required components — `#[require(...)]`, replaces bundles for "always together" composition
 - Queries — read/mut, multi-component, filters, optional, single-entity, multi-entity
 - Change detection — `Changed<T>`, `Added<T>`, `Spawned`, `Ref<T>`, `set_if_neq`
-- Resources — `Res`/`ResMut`, init patterns, optional, vs singleton entities
+- Resources — `Res`/`ResMut`, init patterns, optional, resources-as-components (0.19), vs singleton entities
 - Local — per-system state
 - Relationships — `ChildOf`/`Children`, custom relationships, naming convention
 - Custom QueryData and SystemParam — derive macros for repeated patterns
@@ -176,6 +176,10 @@ fn gravity(mut q: Query<&mut Transform, With<HasMass>>) {
 
 In 0.18, you can also access multiple distinct components on a single entity safely with `entity.get_components_mut::<(&mut A, &mut B)>()`.
 
+For CPU-heavy bulk updates over many entities, 0.19 adds **contiguous iteration** — `query.contiguous_iter()` / `contiguous_iter_mut()` hand you whole table column slices so LLVM can auto-vectorize (SIMD). They return `Err(QueryNotDenseError)` when the query isn't dense (sparse-set components, or `Changed`/`Added` filters break contiguity). See `references/performance.md`.
+
+0.19 also generalized queries to support reading from **multiple entities per item** (e.g. a component on the entity's parent). The fallout for *generic* code: iteration methods (`into_iter`, `single_mut`, `iter_combinations_mut`, …) now need a `D: IterQueryData` bound, and `transmute`/`join`/`sort` need `SingleEntityQueryData`. Concrete query types satisfy these automatically; only generic functions over `D: QueryData` need to add the bound (or iterate non-iterable data with `iter_mut().fetch_next()`).
+
 ## Change detection
 
 `Changed<T>` skips iteration entries where the component hasn't been mutably accessed since the last time *this* system ran:
@@ -209,6 +213,8 @@ fn audit(query: Query<(Entity, Ref<Health>)>) {
     }
 }
 ```
+
+In 0.19, `Ref<T>` is `Copy + Clone`. That means `r.clone()` returns another `Ref<T>`, *not* a cloned inner `T` — to clone the underlying value use `r.as_ref().clone()` (or `r.deref().clone()`).
 
 Mutable access (`Query<&mut T>` or `ResMut<T>`) returns a `Mut<T>` smart pointer. Mutable deref unconditionally marks changed, even if you write the same value back. To avoid spurious change-detection signals:
 
@@ -281,6 +287,38 @@ fn maybe_read(settings: Option<Res<AudioSettings>>) {
 
 In 0.18, resources require `'static` lifetime — `#[derive(Resource)] struct Foo<'a>` no longer compiles.
 
+### Resources are components (0.19)
+
+In 0.19 `Resource` became a subtrait of `Component`, and resources are stored as components on singleton entities. The `#[derive(Resource)]` macro now *also* generates the `Component` impl, which has concrete consequences:
+
+- **Don't co-derive.** `#[derive(Component, Resource)]` produces two `Component` impls and won't compile. If you genuinely need both a component flavor and a resource flavor, make them two types:
+
+  ```rust
+  // 0.18
+  #[derive(Component, Resource)]
+  struct Config { /* ... */ }
+
+  // 0.19 — split them
+  #[derive(Component)]
+  struct ConfigComponent { /* ... */ }
+  #[derive(Resource)]
+  struct ConfigResource { /* ... */ }
+  ```
+
+- **Reflection uses `ReflectComponent`.** `#[reflect(Resource)]` is now a marker only; `ReflectComponent` carries the real machinery. Code that drives resources through reflection (BRP, `bevy_world_serialization`) should reach for `ReflectComponent`. You no longer need `#[derive(MapEntities)]` on a resource — components map entities by default, so `#[derive(Resource)] struct Foo(#[entities] Entity)` is enough.
+
+- **Resources can have hooks, observers, and relationships.** The capabilities that used to be component-only now work on resources: `#[component(on_add = ...)]` on a resource type, `world.add_observer(|_: On<Add, MyResource>, ...|)`, immutability via `#[component(immutable)]`, even relationships pointing at the resource's entity (`world.resource_entity::<R>()` gets it). This narrows the old "resource vs singleton entity" gap considerably.
+
+- **Broad queries now see resources.** Queries that match *all* entities — `Query<Entity>`, `Query<EntityMut>`, `Query<EntityRef>`, `Query<Option<&T>>` — now also match resource entities, which can conflict with `Res`/`ResMut` in the same system. Exclude resource entities with `Without<IsResource>` (the `IsResource` marker is on every resource entity) or `Without<MySpecificResource>`. The same applies to non-send data and `NonSend<T>`.
+
+- **Non-send "resources" are now non-send "data."** Since `Send` resources are components, the `!Send` variants split off: `init_non_send`/`insert_non_send` (the `*_non_send_resource` forms are deprecated), `World::non_send`/`non_send_mut`, etc.
+
+- **Immutable resources affect generic bounds.** `ResMut<R>`, `World::resource_mut::<R>`, and friends now require `R: Resource<Mutability = Mutable>`. Generic code over an arbitrary `R: Resource` that needs `ResMut` must add the bound:
+
+  ```rust
+  fn bump<R: Resource<Mutability = Mutable>>(mut r: ResMut<R>) { /* ... */ }
+  ```
+
 ### Resource vs singleton entity
 
 Resource when the data is truly singular and won't be queried as part of a larger collection (audio settings, world clock, score). Singleton entity (queried via `Single<...>` or `Query<&T, With<Marker>>`) when:
@@ -330,6 +368,18 @@ struct Contents(Vec<Entity>);
 The naming convention is unambiguous: name the component on the *holder* side from the holder's perspective. `ContainedBy` means "this entity is contained by another," not "this entity contains things." `ChildOf` means "this entity is a child of another."
 
 `linked_spawn` means despawning the relationship-target entity (the parent / container) automatically despawns the relationship entities (children / contents).
+
+By default Bevy rejects a relationship that points at its own entity (it logs a warning and removes it) — sensible for structural, traversed relationships like `ChildOf`. For purely semantic relationships where self-reference is valid (`Likes(self)`, `Healing(self)`), opt in with `allow_self_referential` (0.19):
+
+```rust
+#[derive(Component)]
+#[relationship(relationship_target = PeopleILike, allow_self_referential)]
+pub struct LikedBy(pub Entity);
+
+#[derive(Component, Default)]
+#[relationship_target(relationship = LikedBy)]
+pub struct PeopleILike(Vec<Entity>);
+```
 
 Spawn a hierarchy:
 
