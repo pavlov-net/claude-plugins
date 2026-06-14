@@ -23,9 +23,10 @@ Use this when modernizing existing code or interpreting compile errors that look
 | `#[derive(Component, Resource)]` | `#[derive(Resource)]` (implements both) | `Resource: Component` now; co-deriving is a duplicate impl. |
 | `#[reflect(Resource)]` machinery | `ReflectComponent` | `ReflectResource` is a marker only. |
 | `init_non_send_resource` / `insert_non_send_resource` | `init_non_send` / `insert_non_send` | Non-send "resources" → non-send "data". |
+| `Name::from(runtime_str)` (non-`'static` `&str`) | `Name::new(runtime_str.to_owned())` | `Name` now impls `From<&'static str>`, not `From<&str>`. Literals like `Name::from("Player")` still work; only runtime `&str` needs `Name::new(...)`. |
 | `TextFont { font: handle, font_size: 24.0 }` | `TextFont { font: handle.into(), font_size: FontSize::Px(24.0) }` | `font`→`FontSource`, `font_size`→`FontSize`. New `weight`/`width`/`style`, `LetterSpacing`. |
 | `TextLayout::new_with_justify(...)` | `TextLayout::justify(...)` | Also `new_with_linebreak`→`linebreak`, `new_with_no_wrap`→`no_wrap`. |
-| `Font::try_from_bytes(bytes)` | `Font::from_bytes(bytes, "Family")` | No longer `Result`; needs a family name. |
+| `Font::try_from_bytes(bytes)` | `Font::from_bytes(bytes)` | No longer `Result`; family-name arg also dropped (font auto-registers its embedded family + an internal alias). |
 | `experimental_bevy_ui_widgets` feature | `bevy_ui_widgets` | Now in `ui`/default features; `UiWidgetsPlugins` in `DefaultPlugins`. |
 | `experimental_bevy_feathers` feature | `bevy_feathers` | `FeathersPlugin` → `FeathersCorePlugin`. |
 | `CoreScrollbarThumb`, `CoreScrollbarDragState`, `CoreSliderDragState` | `ScrollbarThumb`, `ScrollbarDragState`, `SliderDragState` | `Core` prefix dropped from widget components. |

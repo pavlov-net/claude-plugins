@@ -22,7 +22,7 @@
     },
     {
       "name": "bevy",
-      "description": "Authoritative idioms for Bevy 0.18 game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance.",
+      "description": "Authoritative idioms for Bevy 0.19 game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance.",
       "source": "./bevy"
     }
   ]

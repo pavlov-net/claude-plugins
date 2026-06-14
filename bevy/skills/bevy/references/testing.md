@@ -11,6 +11,7 @@
 - Visual regression tests — when to invest, when to skip
 - Doc tests — better for libraries than for games
 - Architecture for testability — keep gameplay decoupled from rendering
+- Speeding up manual testing — `devtools` feature, examples as binaries, jump-to-state
 - What not to test — heuristics for skipping
 
 Games are notoriously hard to test. Don't let that stop you from testing what *can* be tested cheaply. The cost/benefit lens: spend testing effort proportional to how often the code changes and how subtle its bugs are.
@@ -337,6 +338,14 @@ The big win: **keep gameplay logic decoupled from rendering**. Rendering can't b
 - Visualization (how the HP bar looks) → separate plugin, separate concern → not unit-tested.
 
 Splitting pure logic into a non-Bevy crate (`cargo test -p my_logic` doesn't link Bevy) makes this easier — both ergonomically (no Bevy-graph compile time on every test) and architecturally (you literally *can't* depend on rendering from inside the pure-logic crate).
+
+## Speeding up manual testing
+
+Not everything is worth an automated test — much of game dev is iterating by hand. Make that loop fast:
+
+- **A default-on `devtools` feature flag.** Put all debug/testing utilities (overlays, cheats, state inspectors, the diagnostics overlay) behind one feature, enabled by default, and turn it *off* for release builds. You don't want to recompile to reproduce a tricky bug. (This is distinct from the `headless` flag above, which is about decoupling rendering for CI.)
+- **Rust examples as secondary binaries.** Files in `examples/*.rs` are extra entry points with custom setups — e.g. one that opens straight into the settings menu, or takes an arg to jump to a level.
+- **Jump straight to the interesting state.** Directly set the relevant `State` (or spawn a canned scenario) so you skip the menus to reach the bug. The `run_once` run condition keeps such setup from re-running every frame.
 
 ## What not to test
 

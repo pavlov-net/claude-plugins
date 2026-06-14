@@ -87,7 +87,7 @@ commands.spawn(Camera2d);                      // 2D
 ```
 
 - **`RenderTarget` is its own component (0.18).** To render to a texture, spawn `RenderTarget::Image(image_handle.into())` alongside `Camera3d` rather than setting `Camera { target: ... }`. `RenderTarget::Window(..)` is the default.
-- **`Hdr` is a component (moved to `bevy_camera` in 0.19).** Add `Hdr` to a camera for an HDR render target; it's a camera property, not a view property. Internally `ExtractedView::hdr` moved to `ExtractedCamera::hdr`, and `ViewTarget::is_hdr`/`TextureFormat::bevy_default()` are deprecated in favor of sourcing the format from `ExtractedView::target_format`.
+- **`Hdr` is a component (moved to `bevy_camera` in 0.19).** Add `Hdr` to a camera for an HDR render target; it's a camera property, not a view property. Internally `ExtractedView::hdr` moved to `ExtractedCamera::hdr`; `ViewTarget::is_hdr` was **removed** (use `ExtractedCamera::hdr`), while `TextureFormat::bevy_default()` is deprecated in favor of sourcing the format from `ExtractedView::target_format`.
 - **Camera `order` controls draw sequence** when multiple cameras render to the same target (UI camera on top of game camera, etc.).
 - **`Viewport`** restricts a camera to a sub-rect of its target (split-screen).
 
