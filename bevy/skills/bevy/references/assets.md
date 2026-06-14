@@ -14,6 +14,8 @@
 - Web assets — `http`/`https` features, security caveat
 - Custom asset types — `AssetLoader` trait, `TypePath` requirement (0.18)
 - Asset processing — publish-time transforms, meta files
+- Saving assets at runtime — `save_using_saver`, handle round-tripping (0.19)
+- User settings persistence — `bevy_settings`, `PreferencesPlugin`, `SettingsGroup` (0.19)
 - Render-asset usage — GPU-only meshes, `try_*` mutation methods, auto-Aabb
 
 The mental model: an asset of type `A` lives once in `Assets<A>` (a resource). Anything that wants to use it stores a `Handle<A>`. Handles are reference-counted; when the last handle drops, the asset is unloaded.
@@ -76,7 +78,7 @@ commands.spawn(WorldAssetRoot(asset_server.load("models/hero.glb#Scene0")));
 
 `DynamicWorldBuilder::from_world` and `DynamicWorld::from_world_asset` now require an explicit `&TypeRegistry` argument (read it from `world.resource::<AppTypeRegistry>()`), rather than pulling it out of the world being serialized.
 
-glTF material sub-assets changed too: `asset_server.load("hero.glb#Material0")` now loads a `Handle<GltfMaterial>` — the glTF representation of the material — rather than a `Handle<StandardMaterial>`. This decouples `bevy_gltf` from the rendering stack. Spawning a whole scene via `WorldAssetRoot` still wires up rendering materials automatically; only direct material-handle loads see the new type. (`UvChannel` also moved from `bevy_pbr` to `bevy_mesh`.)
+glTF material sub-assets changed too: `asset_server.load("hero.glb#Material0")` now loads a `Handle<GltfMaterial>` — the glTF representation of the material — rather than a `Handle<StandardMaterial>`. This decouples `bevy_gltf` from the rendering stack. Spawning a whole scene via `WorldAssetRoot` still wires up rendering materials automatically; only direct material-handle loads see the new type. To get a `Handle<StandardMaterial>` from a glTF material, append the `/std` suffix to the sub-asset path — `asset_server.load("hero.glb#Material0/std")` — which requires the (default-on) `bevy_pbr` feature. (`UvChannel` also moved from `bevy_pbr` to `bevy_mesh`.)
 
 ## The handle/asset distinction
 
@@ -168,6 +170,8 @@ asset_server.load::<Image>("enemy.png");
 ```
 
 The reload may take a frame or two during which rendering is missing/broken. Some downstream consumers panic on missing data.
+
+0.19 deprecates `AssetId::invalid()` and `AssetId::INVALID_UUID`. If you stored one as a null sentinel, switch the field to `Option<AssetId<A>>` and use `None` — don't reach for `AssetId::default()`, which isn't guaranteed to be unused.
 
 ## Preload pattern
 
@@ -446,6 +450,19 @@ save_using_saver(asset_server.clone(), &MySaver, &"out/baked.ext".into(), saved,
 `save_using_saver` is async — spawn it on `IoTaskPool::get()`. For assets with sub-assets, build the `SavedAsset` with `SavedAssetBuilder` and `add_labeled_asset_with_new_handle`. Note that in 0.19 `SavedAsset` carries two lifetimes and `AssetSaver::save` takes an extra `asset_path: AssetPath` argument — update custom `AssetSaver` impls accordingly.
 
 To round-trip **asset handles** through reflection-based serialization (e.g. world serialization), the asset must be properly reflected — `#[derive(Asset, Reflect)] #[reflect(Asset)]`, not just `#[derive(Asset, TypePath)]` — and registered. The `HandleSerializeProcessor`/`HandleDeserializeProcessor` store a handle's asset path on save and reload from it on load; pass them to `TypedReflectSerializer::with_processor` if you need the same behavior in your own pipeline.
+
+## User settings persistence (0.19)
+
+Separate from the asset system, 0.19 ships `bevy_settings` — a first-party, game-facing persistence layer for things like volume, graphics options, and window placement (not editor-only). It's resource-based:
+
+```rust
+#[derive(Resource, SettingsGroup, Reflect, Default)]
+struct AudioSettings { music: f32, sfx: f32 }
+
+app.add_plugins(PreferencesPlugin::new("com.example.mygame"));  // reverse-domain id
+```
+
+`PreferencesPlugin` auto-loads each registered `SettingsGroup` and inserts it as a resource at startup — read it like any resource. To persist after a change, queue the debounced `SavePreferencesDeferred(Duration)` command (e.g. on `is_changed`), or `SavePreferencesSync::IfChanged` for a blocking save-on-quit. Files are written as TOML to the OS preferences dir (Linux `$XDG_CONFIG_HOME`, macOS `~/Library/Preferences`, Windows `%LOCALAPPDATA%`; `localStorage` on WASM) via `bevy_platform`'s new `dirs` module.
 
 ## Render-asset usage
 

@@ -374,8 +374,7 @@ Available collections: `2d`, `3d`, `ui`, `audio`, `dev`. Mid-level: `2d_api`, `3
 
 0.19 untangled a few of these so you can swap subsystems without a feature soup:
 
-- **`audio` and `ui` are no longer implied by `2d`/`3d`.** If you build with `default-features = false` and want them, list them explicitly. The upside: dropping `bevy_audio` (e.g. to use `bevy_seedling`) or swapping the UI framework is now just "disable defaults, add `["3d"]`" instead of re-listing everything-except-the-one-thing.
-- **`audio` is a default feature in its own right** — full default builds are unchanged.
+- **`audio` is no longer implied by the `2d`/`3d`/`ui` collections** — it's now its own default feature, so full default builds are unchanged. If you build with `default-features = false` and want audio, add `"audio"` explicitly. The upside: dropping `bevy_audio` (e.g. to use `bevy_seedling`) is now just "disable defaults, list `["3d", "ui"]`" instead of re-listing everything-except-audio. (`ui` remains a top-level default collection alongside `2d`/`3d` — it was *not* decoupled.)
 - **`bevy_window`, `bevy_input_focus`, and `custom_cursor` left `default_app`** (they're in `common_api`/`ui_api`/`default_platform` now). Headless tools and servers that depend on `default_app` compile fewer deps; re-add those three if you relied on them.
 - **Android activity backends** (`android-game-activity`, `android-native-activity`) are no longer default — pick one explicitly.
 

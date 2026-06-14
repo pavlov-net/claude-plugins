@@ -132,7 +132,7 @@ TextFont {
 }
 ```
 
-OpenType features and variation axes are still available via the `font_features: FontFeatures` and `font_variations: FontVariations` fields. `LetterSpacing` is a new component (enum, `Px`/`Rem`, follows the same pattern as `LineHeight`; negative values tighten). `Font::try_from_bytes` → `Font::from_bytes(bytes, "FamilyName")` (no longer returns `Result`, now requires a family name).
+OpenType features and variation axes are still available via the `font_features: FontFeatures` and `font_variations: FontVariations` fields. `LetterSpacing` is a new component (enum, `Px`/`Rem`, follows the same pattern as `LineHeight`; negative values tighten). `Font::try_from_bytes` → `Font::from_bytes(bytes)` (no longer returns `Result`; a later 0.19 change also dropped the family-name argument — loaded font assets auto-register their embedded family name plus an internal alias).
 
 `TextLayout` constructors dropped the `new_with_` prefix: `TextLayout::justify(...)`, `TextLayout::linebreak(...)`, `TextLayout::no_wrap()`.
 
@@ -290,7 +290,7 @@ As of 0.19, Feathers is **no longer experimental**: the feature was renamed `exp
 
 Useful for tooling and inspectors. Uses for shipped games are limited — Feathers has an editor/utility aesthetic, not a general game UI aesthetic.
 
-0.19 grew the widget set considerably: `FeathersTextInput`, number input, dropdown menu + divider, disclosure toggle, icon/label primitives, and pane/subpane/group decorators — plus a `feathers_gallery` example. The widgets are now defined in **BSN** (`bsn!`): the new ones are BSN-only, and the older ones (button, checkbox, slider) gained `bsn!` definitions while their spawn functions were renamed (`button` → `button_bundle`) and deprecated. A Feathers checkbox in BSN, with its caption and change observer in one declaration:
+0.19 grew the widget set considerably: `FeathersTextInput`, number input, dropdown menu + divider, disclosure toggle, icon/label primitives, pane/subpane/group decorators, and a Feathers-themed scrollbar and list view (the themed counterparts to the headless `Scrollbar`) — plus a `feathers_gallery` example. The widgets are now defined in **BSN** (`bsn!`): the new ones are BSN-only, and the older ones (button, checkbox, slider) gained `bsn!` definitions while their spawn functions were renamed (`button` → `button_bundle`) and deprecated. A Feathers checkbox in BSN, with its caption and change observer in one declaration:
 
 ```rust
 bsn! {

@@ -97,7 +97,7 @@ app.add_systems(Update, my_system
     .run_if(in_state(GameState::Playing).and(resource_exists::<Player>)));
 ```
 
-`.run_if(condition_a).run_if(condition_b)` is equivalent to `.run_if(a.and(b))` (AND-only). Use the trait methods `or`, `xor`, `not` on `SystemCondition` for other combinations.
+`.run_if(condition_a).run_if(condition_b)` is equivalent to `.run_if(a.and(b))` (AND-only). For other combinations use the `SystemCondition` trait methods `or`/`xor` (also `nand`/`nor`/`xnor`); to negate, wrap with the free function `not(condition)` from `common_conditions` (as in `not(in_state(S))` above) — `not` is a function, not a trait method.
 
 Run conditions can be applied to entire system sets:
 
@@ -120,6 +120,8 @@ fn move_player(player: Single<&mut Transform, With<Player>>) {
 ```
 
 If there's no player (zero matches) or somehow multiple players, the system doesn't run, no error, no panic. This is what you want for "the player might not exist yet (asset still loading) and that's fine."
+
+**0.19 performance note.** Under the multithreaded executor, param validation is no longer a cheap pre-pass — a task is now spawned even for a system that ends up skipped. For most systems that's a net win, but a system that is *frequently* skipped (commonly a `Single` that usually has no match) now pays task-spawn overhead each tick. If such a system profiles as hot, gate it with a cheap run condition (e.g. `.run_if(in_state(...))` or `.run_if(resource_exists::<T>)`) to recover the old no-dispatch skip. Correctness of the `Single` guidance above is unchanged — this is tuning only.
 
 For "the resource might not exist," wrap in `Option`:
 

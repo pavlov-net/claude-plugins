@@ -119,7 +119,7 @@
         "Composes children with Children [ ... ] and attaches behavior with on(|e: On<...>, ...| { ... }) observers inline.",
         "Spawns the scene with commands.spawn_scene(...) / world.spawn_scene(...) (or the fn.spawn() startup-system idiom) — NOT via a SceneRoot/WorldAssetRoot component (those are for the old/glTF system).",
         "Does not claim .bsn files can be loaded yet, and does not claim glTF uses BSN — both are explicitly not ready in 0.19.",
-        "Does not fabricate BSN syntax; patches, :fn inheritance (arg-less), and @SceneComponent { @prop } usage (if shown) match the real macro."
+        "Does not fabricate BSN syntax; patches, scene-fn composition via bare calls (e.g. button(\"Ok\") inside bsn!, NOT a :fn syntax), and @SceneComponent { @prop } usage (if shown) match the real macro."
       ]
     },
     {

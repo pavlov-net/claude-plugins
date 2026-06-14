@@ -5,7 +5,7 @@
 - The `bsn!` macro — what it produces
 - Spawning a scene — `spawn_scene`, `queue_spawn_scene`, the `.spawn()` startup idiom
 - Syntax reference — patches, children, observers, names, inheritance, scene components
-- Composition and inheritance — fragments, `:fn` patching
+- Composition — fragments composed via bare scene-fn calls
 - `SceneComponent` and props — `@Type { @prop: … }`
 - Relationship to the old scene system (`bevy_world_serialization`)
 - Honest limitations in 0.19
@@ -65,15 +65,15 @@ Inside `bsn! { ... }`, a root entity is a whitespace-separated list of component
 | `#Name` | Assign `Name("Name")` and make the entity referenceable within the scene. |
 | `#{expr}` | Dynamic name from an expression. |
 | `{expr}` | An arbitrary Rust expression that is itself a `Scene` / value. |
-| `:other_fn` | Inherit from / patch on top of another scene fn (function inheritance). |
+| `other_fn(args)` | Compose another scene fn — a **bare call** inside `bsn!`; patches written after it layer on top. |
 | `:"path.bsn"` | Asset inheritance — **parses but does not load in 0.19** (no `.bsn` format yet). |
 | `@SceneComponent { @prop: value, field: value }` | Spawn a `SceneComponent`, setting its props (`@prop`) and components. |
 
 Patch semantics matter: `Node { width: px(10) }` sets *only* `width` and leaves everything else at its prior value, so fragments compose by layering partial patches rather than overwriting whole components.
 
-## Composition and inheritance
+## Composition
 
-The idiomatic pattern is small scene-returning functions composed via `Children` and `:fn` inheritance:
+The idiomatic pattern is small scene-returning functions composed by **calling them bare** inside `bsn!` (and nesting via `Children`):
 
 ```rust
 fn main() {
@@ -115,7 +115,7 @@ fn button(label: &str) -> impl Scene {
 }
 ```
 
-Note in the `menu()` example that `button("Cancel")` is patched *after the fact* with an extra `BackgroundColor` — the fragment provides a base, the call site layers on top. `:fn` inheritance does the same at the scene level (the parent fn is pre-resolved and cached). In real code `:fn` is used with bare (argument-less) scene fns:
+Note in the `menu()` example that `button("Cancel")` is patched *after the fact* with an extra `BackgroundColor` — the fragment provides a base, the call site layers patches on top. The same works for argument-less fragments: call the fn bare and write overrides after it (there is no `:fn` syntax for this — a colon prefix is asset inheritance, `:"path.bsn"`).
 
 ```rust
 fn plain_button() -> impl Scene {
@@ -124,13 +124,11 @@ fn plain_button() -> impl Scene {
 
 fn fancy_button() -> impl Scene {
     bsn! {
-        :plain_button                         // inherit the base button
+        plain_button()                        // compose the base button (bare call)
         BorderColor::from(Color::GOLD)        // then override
     }
 }
 ```
-
-(To parametrize, call the fn as a plain expression instead — `button("Ok")` inside `Children`, as in `menu()` above.)
 
 ## `SceneComponent` and props
 
@@ -161,7 +159,7 @@ For glTF you still use `WorldAssetRoot(asset_server.load("scene.gltf#Scene0"))` 
 
 ## Honest limitations in 0.19
 
-What works: the `bsn!` / `bsn_list!` macros (inline Rust scenes), `spawn_scene`/`queue_spawn_scene`, the `.spawn()` startup idiom, `Children`/`on(...)`, function inheritance (`:fn`), `@SceneComponent { @prop }`, and `ScenePatchInstance` for deferred application.
+What works: the `bsn!` / `bsn_list!` macros (inline Rust scenes), `spawn_scene`/`queue_spawn_scene`, the `.spawn()` startup idiom, `Children`/`on(...)`, scene-fn composition (bare calls), `@SceneComponent { @prop }`, and `ScenePatchInstance` for deferred application.
 
 What is **not** ready:
 

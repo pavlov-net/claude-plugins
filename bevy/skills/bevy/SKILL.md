@@ -91,8 +91,9 @@ This is the single most-confused area in modern Bevy. Three distinct communicati
 - **Embedded assets** for assets shipped inside the binary: register with `EmbeddedAssetRegistry::insert_asset(path, &path, bytes)`, load via `embedded://<crate>/<path>` URLs. Pair with the `embedded_watcher` feature for hot reload during dev.
 - **Web assets** in 0.17+: enable the `http`/`https` features and `asset_server.load("https://example.com/foo.png")` works. Optional `web_asset_cache` feature for filesystem caching.
 - **Hot reload** via the `file_watcher` feature flag. Listen for `AssetEvent::Modified` or filter with `AssetChanged<T>`. This is also the foundation of asset-driven gameplay (RON manifests of items/abilities) — leaning into hot reload for tuning is a powerful pattern for data-heavy games.
+- **Persistent user settings (0.19).** Separate from assets, `bevy_settings` is a first-party, game-facing persistence layer (volume, graphics, window placement). Derive `(Resource, SettingsGroup, Reflect)` on a settings struct, add `PreferencesPlugin::new("com.example.app")` to auto-load and insert each group as a resource, then save with the debounced `SavePreferencesDeferred(Duration)` command (or `SavePreferencesSync::IfChanged` on quit). Files go to the OS preferences dir. See `references/assets.md`.
 
-`references/assets.md` has full coverage including the mutation semantics, render-asset GPU-only pitfalls, and asset-driven gameplay setup.
+`references/assets.md` has full coverage including the mutation semantics, render-asset GPU-only pitfalls, asset-driven gameplay setup, and the `bevy_settings` persistence layer.
 
 ## UI
 
@@ -134,7 +135,7 @@ commands.spawn_scene(bsn! {
 
 What's **not** ready in 0.19: `.bsn` files don't load (the asset format isn't released) and the glTF loader isn't ported — so for glTF you still use `WorldAssetRoot(asset_server.load("scene.gltf#Scene0"))` from `bevy_world_serialization`, and there's no `World`→BSN round-trip yet.
 
-`references/bsn.md` has the full syntax (patches, `Children`, `on`, `:fn` inheritance, `@SceneComponent` props), composition patterns, and the honest list of what works. `references/assets.md` covers the `bevy_scene` → `bevy_world_serialization` rename and glTF scene spawning.
+`references/bsn.md` has the full syntax (patches, `Children`, `on`, scene-fn composition via bare calls, `@SceneComponent` props), composition patterns, and the honest list of what works. `references/assets.md` covers the `bevy_scene` → `bevy_world_serialization` rename and glTF scene spawning.
 
 ## Rendering
 
@@ -182,7 +183,7 @@ Bevy testing fans out by fidelity (cheap → expensive):
 - **Profile before optimizing.** Tracy is the canonical tool: enable the `trace_tracy` feature, run the Tracy GUI capture tool (`capture-release`), launch the app. Bevy's built-in spans show every system. Add custom spans with `info_span!("name")`. Memory tracking adds significant overhead; enable only when chasing allocation issues.
 - **Compile profile for release.** `[profile.release]`: `opt-level = 3` for desktop or `'z'`/`'s'` for wasm/mobile binary size, `lto = "fat"`, `codegen-units = 1`, `strip = "debuginfo"`. Add `[profile.dev.package."*"] opt-level = 3` so dev builds run dependencies (including Bevy) at full optimization while keeping your code unoptimized for fast incremental compiles.
 - **Dev iteration speed**: `bevy/dynamic_linking` feature is the single biggest compile-time win for development. Don't ship it. Use the `lld` linker on Linux (Rust 1.90+ defaults to it on `x86_64-unknown-linux-gnu`), `mold` if you want to push further. Cranelift codegen on nightly is faster but the binary is slower — fine for `cargo run`, not for benchmarking.
-- **Cargo feature collections** mean you rarely need to hand-pick features any more. `bevy = { default-features = false, features = ["3d", "ui"] }` is the shape. In 0.19 `audio` and `ui` are no longer pulled in implicitly by `2d`/`3d` (so a non-default build that wants them must list them), and `audio` is now its own default feature — disabling default features and listing only `["3d", "ui"]` is the clean way to drop `bevy_audio`.
+- **Cargo feature collections** mean you rarely need to hand-pick features any more. `bevy = { default-features = false, features = ["3d", "ui"] }` is the shape. In 0.19 `audio` is no longer pulled in implicitly by the `2d`/`3d`/`ui` collections — it's now its own default feature (so a non-default build that wants it must list `"audio"`); disabling default features and listing only `["3d", "ui"]` is the clean way to drop `bevy_audio`.
 
 `references/performance.md` has Tracy walkthrough, GPU profiling pointers, and compile-time tooling (cargo-bloat, cargo-llvm-lines, cargo --timings).
 
@@ -222,7 +223,7 @@ Load these as the task lands in their area:
 - `references/communication.md` — Event vs Message vs Observer, `EntityEvent`, propagation, lifecycle hooks (`Discard`)
 - `references/plugins.md` — plugin pattern, project organization, system-set centralization, plugin groups
 - `references/scheduling.md` — schedules, ordering, run conditions, states/sub-states/computed states, time and timers
-- `references/assets.md` — handles, asset framework, preloading, hot reloading, embedded/web assets, render wrappers, `bevy_world_serialization`/glTF, BSN split
+- `references/assets.md` — handles, asset framework, preloading, hot reloading, embedded/web assets, render wrappers, `bevy_world_serialization`/glTF, BSN split, `bevy_settings` persistence
 - `references/ui.md` — `Node`, `UiTransform`, `Val` helpers, text (`FontSource`/`FontSize`), headless widgets, `EditableText`, Feathers
 - `references/bsn.md` — BSN (`bsn!`) syntax, scene composition/inheritance, `SceneComponent` props, spawning, 0.19 limitations
 - `references/rendering.md` — render-graph-as-systems, `Core3d`/`Core2d` schedules, cameras/lights/shadows, atmosphere, post-processing, dev tools (gizmos, overlays, infinite grid)

@@ -82,7 +82,7 @@ app.add_message::<DamageDealt>()
 
 `add_message` does two things: inserts a `Messages<DamageDealt>` resource (the queue), and adds `message_update_system` to `First`, which advances the double buffer once per frame.
 
-Lifetime: a message is readable for one full frame after writing. Internally `Messages` keeps two buffers; each `update` call swaps them and drops the older.
+Lifetime: a message survives up to two `Messages::update` calls (double-buffered). With the default once-per-frame update, a message written this frame is still readable next frame, then dropped. Internally `Messages` keeps two buffers; each `update` swaps them and drops the older.
 
 If you want updates to happen at a different cadence (e.g., in `FixedUpdate` for deterministic gameplay), don't use `add_message` — manually insert `Messages::<M>::default()` and call `messages.update()` from a system in your preferred schedule.
 

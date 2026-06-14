@@ -12,7 +12,7 @@
 - Combinator semantics (0.18) — `or`/`and` no longer propagate errors
 - When to use what — decision table
 
-Bevy distinguishes three failure tiers: panic (truly unrecoverable), `Err` from a system (recoverable, routed to a global handler), and silent skip (fallible system params).
+Bevy distinguishes three failure tiers: panic (fatal by default — but catchable as of 0.19, see below), `Err` from a system (recoverable, routed to a global handler), and silent skip (fallible system params).
 
 ## When to panic
 
@@ -23,6 +23,8 @@ Almost never in application code. `unwrap`, `expect`, and `panic!` should be res
 - Genuinely unrecoverable bugs that indicate the program is in a broken state and continuing would do more harm than crashing.
 
 If you find yourself reaching for `unwrap` because "this can't fail," ask whether the failure mode is *truly* impossible or just unlikely. Unlikely failure modes find their way to production eventually.
+
+As of 0.19, a panic inside a system, command, or observer is caught, converted to an error, and routed through the same `FallbackErrorHandler` rather than tearing down the whole app. The default handler still re-panics (so dev behavior is unchanged), but you can configure it to log-and-continue — valuable for long-running processes (editors, installations) where one tool's bug shouldn't lose unsaved work. This widens what the global handler governs, but `unwrap`/`panic!` still signal "broken state," so the guidance above stands.
 
 Useful Clippy lints to enforce this:
 
@@ -283,8 +285,8 @@ fn save(mut commands: Commands) {
             // ...
             Ok(())
         },
-        |error: BevyError, ctx: ErrorContext| {
-            error!(?error, ?context = ctx);
+        |error: BevyError, context: ErrorContext| {
+            error!(?error, ?context);
         },
     );
 }
