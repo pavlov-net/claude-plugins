@@ -22,7 +22,7 @@ The `bevy` skill is also published as a [Codex plugin](https://developers.openai
 | [`auto-format`](./auto-format) | Auto-format files after Claude edits them. Supports Go (goimports/gofmt), Rust (rustfmt), Python (ruff/black), and JS/TS (biome/prettier). |
 | [`efficient-commands`](./efficient-commands) | Teaches Claude to use shell commands efficiently — avoid re-running expensive commands and stop tail/head chasing. |
 | [`tsgo-lsp`](./tsgo-lsp) | TypeScript 7 native LSP — uses [tsgo](https://www.npmjs.com/package/@typescript/native-preview) for faster type checking and diagnostics. |
-| [`bevy`](./bevy) | Authoritative idioms for [Bevy 0.18](https://bevyengine.org/) game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance. |
+| [`bevy`](./bevy) | Authoritative idioms for [Bevy 0.19](https://bevyengine.org/) game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance. |
 | [`tech-writing`](./tech-writing) | Write and clean up documentation and code comments that read like a terse senior engineer wrote them — present-tense, say-once, no filler, no AI tells. |
 
 ## License
