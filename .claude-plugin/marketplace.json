@@ -24,6 +24,11 @@
       "name": "bevy",
       "description": "Authoritative idioms for Bevy 0.19 game projects in Rust — ECS, communication, scheduling, plugins, assets, UI, errors, testing, performance.",
       "source": "./bevy"
+    },
+    {
+      "name": "tech-writing",
+      "description": "Write and clean up documentation and code comments that read like a terse senior engineer wrote them — present-tense, say-once, no filler, no AI tells.",
+      "source": "./tech-writing"
     }
   ]
 }
