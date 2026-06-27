@@ -1,0 +1,10 @@
+{
+  "name": "tech-writing",
+  "description": "Write and clean up documentation and code comments that read like a terse senior engineer wrote them — present-tense, say-once, no filler, no AI tells.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Stuart Parmenter"
+  },
+  "license": "MIT",
+  "keywords": ["documentation", "comments", "docstrings", "technical-writing", "skill"]
+}
