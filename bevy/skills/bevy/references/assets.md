@@ -13,9 +13,10 @@
 - Embedded assets — `EmbeddedAssetRegistry`, `embedded://` URLs
 - Web assets — `http`/`https` features, security caveat
 - Custom asset types — `AssetLoader` trait, `TypePath` requirement (0.18)
+- Mesh compression — `GltfPlugin::mesh_compression`, `MeshCompressionArgs` (0.20)
 - Asset processing — publish-time transforms, meta files
 - Saving assets at runtime — `save_using_saver`, handle round-tripping (0.19)
-- User settings persistence — `bevy_settings`, `PreferencesPlugin`, `SettingsGroup` (0.19)
+- User settings persistence — `bevy_settings`, `SettingsPlugin`, `SettingsGroup` (0.19)
 - Render-asset usage — GPU-only meshes, `try_*` mutation methods, auto-Aabb
 
 The mental model: an asset of type `A` lives once in `Assets<A>` (a resource). Anything that wants to use it stores a `Handle<A>`. Handles are reference-counted; when the last handle drops, the asset is unloaded.
@@ -35,7 +36,7 @@ The path is relative to the `assets/` directory next to your `Cargo.toml`. Overr
 
 Calls to `load(same_path)` are deduplicated by `AssetPath` — you get the same handle, no second load.
 
-In 0.19 the many specialized load variants (`load_acquire`, `load_untyped`, `load_with_settings`, `load_acquire_override_with_settings`, …) were collapsed into one builder. `load(path)` is the convenience path; reach for `load_builder()` for anything fancier (they're all deprecated in favor of it):
+In 0.19 the many specialized load variants (`load_acquire`, `load_untyped`, `load_with_settings`, `load_acquire_override_with_settings`, …) were collapsed into one builder; 0.20 removes the deprecated ones. `load(path)` is the convenience path; reach for `load_builder()` for anything fancier:
 
 ```rust
 let handle = asset_server
@@ -131,7 +132,7 @@ Some components wrap a handle:
 - **`MeshMaterial2d<M>`** — same for 2D.
 - **`Mesh3d`** — wraps `Handle<Mesh>` for 3D meshes.
 - **`Mesh2d`** — same for 2D.
-- **`Sprite`** — has an `image: Handle<Image>` field; usually constructed with `Sprite::from_image(handle)`.
+- **`Sprite`** — has an `image: Handle<Image>` field; usually constructed with `Sprite::from_image(handle)`. 0.20 adds an `alpha_mode` field and an optional `SpriteMaterial<M>` — see `references/rendering.md`.
 
 A bare `Handle<StandardMaterial>` is *not* a `Component` — the wrapper is. Old code with `Query<&Handle<StandardMaterial>>` doesn't compile in 0.17+; replace with `Query<&MeshMaterial3d<StandardMaterial>>` and access the underlying handle via `.0`.
 
@@ -171,7 +172,7 @@ asset_server.load::<Image>("enemy.png");
 
 The reload may take a frame or two during which rendering is missing/broken. Some downstream consumers panic on missing data.
 
-0.19 deprecates `AssetId::invalid()` and `AssetId::INVALID_UUID`. If you stored one as a null sentinel, switch the field to `Option<AssetId<A>>` and use `None` — don't reach for `AssetId::default()`, which isn't guaranteed to be unused.
+0.20 deprecates `AssetId::invalid()` and `AssetId::INVALID_UUID`. If you stored one as a null sentinel, switch the field to `Option<AssetId<A>>` and use `None` — don't reach for `AssetId::default()`, which isn't guaranteed to be unused.
 
 ## Preload pattern
 
@@ -255,7 +256,7 @@ The canonical loading screen pattern: define an `AssetState` (or similar) state,
 Enable the `file_watcher` feature:
 
 ```toml
-bevy = { version = "0.19", features = ["file_watcher"] }
+bevy = { version = "0.20", features = ["file_watcher"] }
 ```
 
 Or run with the flag:
@@ -281,10 +282,12 @@ fn on_image_changed(mut events: MessageReader<AssetEvent<Image>>) {
 Or use the `AssetChanged<T>` query filter:
 
 ```rust
-fn handle_changed_images(query: Query<&Sprite, AssetChanged<Image>>) {
+fn handle_changed_images(query: Query<&Sprite, AssetChanged<Sprite>>) {
     // Sprites whose image asset changed since last run.
 }
 ```
+
+The type parameter is the **component that holds the handle**, not the asset type — `AssetChanged<Sprite>`, `AssetChanged<Mesh3d>`, `AssetChanged<MeshMaterial3d<StandardMaterial>>`.
 
 `AssetEvent` variants: `Added`, `Modified`, `Removed`, `LoadedWithDependencies`, `Unused`.
 
@@ -366,7 +369,7 @@ Combine with `embedded_watcher` for hot reload from the source files during deve
 The `http`/`https` features let `asset_server.load("https://example.com/icon.png")` work over the network:
 
 ```toml
-bevy = { version = "0.19", features = ["http", "https"] }
+bevy = { version = "0.20", features = ["http", "https"] }
 ```
 
 On native, this uses the `ureq` crate. On wasm, it uses the browser's fetch API.
@@ -411,6 +414,28 @@ In 0.18, `AssetLoader`/`AssetTransformer`/`AssetSaver`/`Process` all require `Ty
 
 For 0.18, `LoadContext::path()` returns `AssetPath` (used to return a `Path`). If you need the underlying path, `load_context.path().path()` works, but using `AssetPath` is preferred — it supports custom asset sources cleanly.
 
+## Mesh compression (0.20)
+
+glTF meshes can be compressed at load time, shrinking GPU memory and upload cost. App-wide default:
+
+```rust
+app.add_plugins(DefaultPlugins.set(GltfPlugin {
+    mesh_compression: MeshCompressionArgs::regular(),
+    ..default()
+}));
+```
+
+Per load, override it through the loader settings:
+
+```rust
+asset_server
+    .load_builder()
+    .with_settings(|s: &mut GltfLoaderSettings| s.mesh_compression = Some(MeshCompressionArgs::regular()))
+    .load("model.glb");
+```
+
+`MeshCompressionArgs::none()` is the plugin default; `regular()` is the sensible lossy preset (U16 indices, snorm16 positions, octahedral snorm16 normals/tangents, unorm16 UVs, unorm8 colors). `None` in the loader settings means "use the plugin default". Import `bevy::mesh::MeshCompressionArgs` and `bevy::gltf::GltfPlugin` — neither is in the prelude. Any hand-built mesh can be compressed the same way with `mesh.compressed_mesh(&args)` / `mesh.compress_mesh(&args)`. Bevy's built-in 2D and 3D vertex shaders decode the compressed layouts automatically; **a custom vertex shader has to handle the `VERTEX_*_COMPRESSED` variants itself**.
+
 ## Asset processing
 
 Bevy supports processing assets at "publish time" (build time, or first run) into a more optimal format:
@@ -436,6 +461,8 @@ Configure per-asset processing via meta files (`my_asset.png.meta`):
 
 Processed assets are cached. The processor runs once and the result is reused for subsequent loads. Useful for expensive transforms — image resizing, mesh optimization, audio compression.
 
+**Texture compression changed in 0.20.** The `compressed_image_saver` feature now compresses to BCn (desktop) or ASTC (mobile) through `ctt` — higher quality and wider input support, but no longer one file for every platform. The old Basis Universal UASTC behaviour moved to `compressed_image_saver_universal`, which is what you want when targeting the web. The default image processor now covers JPEG as well as PNG; restrict it with `ImagePlugin::default_compressed_image_processor_extensions`.
+
 ## Saving assets at runtime (0.19)
 
 `AssetSaver` used to be reachable only from inside the processing pipeline. 0.19 adds `save_using_saver` so you can save *any* asset to disk at runtime — a procedurally generated mesh, a baked lightmap, in-editor output:
@@ -453,26 +480,33 @@ To round-trip **asset handles** through reflection-based serialization (e.g. wor
 
 ## User settings persistence (0.19)
 
-Separate from the asset system, 0.19 ships `bevy_settings` — a first-party, game-facing persistence layer for things like volume, graphics options, and window placement (not editor-only). It's resource-based:
+Separate from the asset system, 0.19 shipped `bevy_settings` — a first-party, game-facing persistence layer for volume, graphics options, window placement and the like (not editor-only). It is **opt-in**: enable the `bevy_settings` Cargo feature, which is in no feature collection. It's resource-based:
 
 ```rust
+use bevy::settings::{
+    ReflectSettingsGroup, SaveSettingsDeferred, SaveSettingsSync, SettingsGroup, SettingsPlugin,
+};
+
 #[derive(Resource, SettingsGroup, Reflect, Default)]
+#[reflect(Resource, SettingsGroup, Default)]
 struct AudioSettings { music: f32, sfx: f32 }
 
-app.add_plugins(PreferencesPlugin::new("com.example.mygame"));  // reverse-domain id
+app.add_plugins(SettingsPlugin::new("com.example.mygame"));  // reverse-domain id
 ```
 
-`PreferencesPlugin` auto-loads each registered `SettingsGroup` and inserts it as a resource at startup — read it like any resource. To persist after a change, queue the debounced `SavePreferencesDeferred(Duration)` command (e.g. on `is_changed`), or `SavePreferencesSync::IfChanged` for a blocking save-on-quit. Files are written as TOML to the OS preferences dir (Linux `$XDG_CONFIG_HOME`, macOS `~/Library/Preferences`, Windows `%LOCALAPPDATA%`; `localStorage` on WASM) via `bevy_platform`'s new `dirs` module.
+The `#[reflect(Resource, SettingsGroup, Default)]` line is load-bearing: the derive does not register the reflect type data, and without it the group compiles but never loads or saves. Use `#[settings_group(group = "…")]` to merge several types into one section of the file.
+
+`SettingsPlugin` auto-loads each registered `SettingsGroup` and inserts it as a resource at startup — read it like any resource. To persist after a change, queue the debounced `SaveSettingsDeferred(Duration)` command (e.g. on `is_changed`), or `SaveSettingsSync::IfChanged` for a blocking save-on-quit; a reliable setup uses both, because some platforms (Command-Q on macOS) give you no chance to intercept the exit. Saves are crash-safe (temp file plus atomic replace). Files are written as TOML to the OS preferences dir (Linux `$XDG_CONFIG_HOME`, macOS `~/Library/Preferences`, Windows `%LOCALAPPDATA%`; `localStorage` on WASM) via `bevy_platform`'s `dirs` module.
 
 ## Render-asset usage
 
 Some assets (meshes, images) are uploaded to GPU memory and may have their CPU-side data discarded:
 
 ```rust
-let mesh = Mesh::new(/* ... */).with_render_asset_usages(RenderAssetUsages::RENDER_WORLD);
+let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
 ```
 
-For these meshes, `mesh.insert_attribute(...)` panics in 0.18 (the data has been extracted to the render world and is no longer accessible CPU-side).
+Usages are a constructor argument, not a builder step — there is no `with_render_asset_usages`. For these meshes, `mesh.insert_attribute(...)` panics (the data has been extracted to the render world and is no longer accessible CPU-side).
 
 Use the `try_*` variants if there's any chance the asset is render-only:
 

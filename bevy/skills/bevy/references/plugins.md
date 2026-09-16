@@ -201,6 +201,8 @@ fn configure_schedule(app: &mut App) {
 }
 ```
 
+Keep `.chain()` for your own top-level phase sets — it is the safe default. (0.20) `.chain_weak()` is the opt-in variant that keeps an edge only between systems whose tracked accesses actually conflict; reach for it when a wide chain measurably serializes independent work and nothing in it communicates through channels, atomics or interior mutability. See `references/scheduling.md`.
+
 Then plugins drop their systems into named sets:
 
 ```rust

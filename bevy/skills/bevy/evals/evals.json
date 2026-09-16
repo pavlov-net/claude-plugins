@@ -4,14 +4,14 @@
     {
       "id": 1,
       "name": "spawn-time-reaction",
-      "prompt": "I'm working on a Bevy 0.19 game. Whenever a Creature entity dies, I want to spawn a particle effect at its position and play a death sound. How should I wire this up? Give me the recommended pattern with brief code.",
+      "prompt": "I'm working on a Bevy 0.20 game. Whenever a Creature entity dies, I want to spawn a particle effect at its position and play a death sound. How should I wire this up? Give me the recommended pattern with brief code.",
       "expected_behavior": [
-        "Recommends an EntityEvent (e.g. CreatureDied { entity }) plus an observer, OR an On<Remove, Creature>/On<Despawn, Creature> lifecycle observer — not the old EventReader/EventWriter approach.",
+        "Recommends an EntityEvent (e.g. CreatureDied { entity }) plus an observer, OR an On<Remove<Creature>>/On<Despawn<Creature>> lifecycle observer — not the old EventReader/EventWriter approach.",
         "Uses 0.17+ idioms: On<E> parameter (not Trigger<E>), commands.trigger() to fire, derive(EntityEvent) when the entity is the target.",
         "Mentions reading the dying creature's Transform/position via the observer's system params before despawn fires (or stashing it in the event).",
         "Does not suggest Event with EventReader, does not suggest world.trigger_targets.",
         "Code uses MeshMaterial3d/Mesh3d wrappers if it touches material handles (does not use Query<&Handle<...>>).",
-        "If it mentions the replace/discard lifecycle event, uses the 0.19 name Discard (not Replace)."
+        "Uses 0.20 lifecycle syntax: On<Add<T>>/On<Remove<T>>/On<Despawn<T>> with a single generic — NOT the 0.19 two-generic On<Add, T>. If it mentions the replace/discard event, uses Discard (not Replace)."
       ]
     },
     {
@@ -29,7 +29,7 @@
     {
       "id": 3,
       "name": "damage-batching",
-      "prompt": "Design a damage system for a Bevy 0.19 game. I have multiple sources of damage — melee attacks, ranged projectiles, environmental hazards (fire, poison) — each running in its own system. I want one place that applies all damage to entities and triggers death checks. What's the idiomatic structure?",
+      "prompt": "Design a damage system for a Bevy 0.20 game. I have multiple sources of damage — melee attacks, ranged projectiles, environmental hazards (fire, poison) — each running in its own system. I want one place that applies all damage to entities and triggers death checks. What's the idiomatic structure?",
       "expected_behavior": [
         "Recommends Message (#[derive(Message)] struct DamageDealt { target, amount, ... }) for the multi-producer/single-consumer batching pattern, NOT Event/Observer.",
         "Uses MessageWriter in producer systems and MessageReader in the apply_damage consumer system.",
@@ -42,20 +42,20 @@
     {
       "id": 4,
       "name": "state-machine-cleanup",
-      "prompt": "I'm setting up a Bevy 0.19 game with a main menu, gameplay, and game-over screen. How do I structure the states, and what's the cleanest way to make sure menus despawn when transitioning between them so I don't leak HUD entities?",
+      "prompt": "I'm setting up a Bevy 0.20 game with a main menu, gameplay, and game-over screen. How do I structure the states, and what's the cleanest way to make sure menus despawn when transitioning between them so I don't leak HUD entities?",
       "expected_behavior": [
         "Defines a #[derive(States, ...)] enum with the three states; registers with app.init_state::<AppState>().",
         "Uses OnEnter(AppState::X) / OnExit(AppState::X) for setup/teardown systems.",
         "Recommends DespawnOnExit(AppState::X) on entities that should not survive the state — the canonical pattern that eliminates manual cleanup systems.",
         "Optionally mentions sub-states for nested states (e.g. Paused inside InGame), or computed states for 'is the game in any of these states' run conditions.",
-        "Notes that next_state.set(X) re-fires OnEnter even if already in X, and that in 0.19 this also re-runs DespawnOnEnter/DespawnOnExit; set_if_neq for the skip-if-equal behavior.",
+        "Notes that next_state.set(X) re-fires OnEnter even if already in X, and that this also re-runs DespawnOnEnter/DespawnOnExit; NextState::set_if_different (0.20 rename — set_if_neq no longer exists on NextState) for the skip-if-equal behavior.",
         "Does not propose manually iterating queries to despawn entities one by one."
       ]
     },
     {
       "id": 5,
       "name": "plugin-organization",
-      "prompt": "I'm starting a new feature for a Bevy 0.19 game: an inventory system (items, equipment, slots). The codebase already has CombatPlugin and MovementPlugin. How should I organize the inventory code? What goes in the plugin, where do I put types, and how do I keep system ordering sane as more features arrive?",
+      "prompt": "I'm starting a new feature for a Bevy 0.20 game: an inventory system (items, equipment, slots). The codebase already has CombatPlugin and MovementPlugin. How should I organize the inventory code? What goes in the plugin, where do I put types, and how do I keep system ordering sane as more features arrive?",
       "expected_behavior": [
         "Recommends one plugin per feature: an InventoryPlugin (struct or fn-as-plugin) that registers messages/observers/systems for inventory.",
         "Recommends organizing by feature, not by file kind: src/inventory/{plugin,components,systems,messages}.rs (or similar), not src/components/inventory.rs + src/systems/inventory.rs.",
@@ -68,7 +68,7 @@
     {
       "id": 6,
       "name": "resources-as-components",
-      "prompt": "I just upgraded my Bevy game to 0.19 and now `#[derive(Component, Resource)] struct GameConfig { ... }` won't compile — something about conflicting Component implementations. What changed and how do I fix it?",
+      "prompt": "I just upgraded my Bevy game from 0.18 to 0.20 and now `#[derive(Component, Resource)] struct GameConfig { ... }` won't compile — something about conflicting Component implementations. What changed and how do I fix it?",
       "expected_behavior": [
         "Explains that in 0.19 Resource became a subtrait of Component, so #[derive(Resource)] now ALSO implements Component — deriving both gives two conflicting Component impls.",
         "Recommends dropping the Component derive if it's only used as a resource (just #[derive(Resource)]), or splitting into two distinct types if both a component flavor and a resource flavor are genuinely needed.",
@@ -79,10 +79,10 @@
     {
       "id": 7,
       "name": "text-font-update",
-      "prompt": "My Bevy UI text code broke after upgrading to 0.19: `TextFont { font: asset_server.load(\"font.ttf\"), font_size: 24.0, ..default() }` gives type errors on both font and font_size. What's the correct 0.19 form?",
+      "prompt": "My Bevy UI text code broke after upgrading from 0.18 to 0.20: `TextFont { font: asset_server.load(\"font.ttf\"), font_size: 24.0, ..default() }` gives type errors on both font and font_size. What's the correct 0.20 form?",
       "expected_behavior": [
         "Identifies that 0.19 migrated text to parley: TextFont.font is now a FontSource and font_size is now a FontSize enum.",
-        "Gives the fix: font: asset_server.load(\"font.ttf\").into() (or FontSource::Family/FontSource::Monospace), font_size: FontSize::Px(24.0).",
+        "Gives the fix: font: asset_server.load(\"font.ttf\").into() (or the FontSource::family(\"…\")/FontSource::monospace() constructors — not FontSource::Family/FontSource::Monospace as enum variants), font_size: FontSize::Px(24.0).",
         "Does not claim the old f32 / Handle<Font> still works.",
         "May correctly mention new weight/width/style fields, LetterSpacing, FontSize::Rem/Vh responsive units, or the system_font_discovery feature — without fabricating API names."
       ]
@@ -90,7 +90,7 @@
     {
       "id": 8,
       "name": "gltf-scene-spawning",
-      "prompt": "In Bevy 0.19, `commands.spawn(SceneRoot(asset_server.load(\"hero.glb#Scene0\")))` no longer compiles — SceneRoot isn't found. How do I spawn a glTF scene now?",
+      "prompt": "In Bevy 0.20, `commands.spawn(SceneRoot(asset_server.load(\"hero.glb#Scene0\")))` no longer compiles — SceneRoot isn't found. How do I spawn a glTF scene now?",
       "expected_behavior": [
         "Explains that 0.19 renamed the old scene crate bevy_scene -> bevy_world_serialization (the bevy_scene name now hosts the new BSN system).",
         "Gives the fix: commands.spawn(WorldAssetRoot(asset_server.load(\"hero.glb#Scene0\"))).",
@@ -101,36 +101,73 @@
     {
       "id": 9,
       "name": "text-input-widget",
-      "prompt": "I need a simple text entry field in my Bevy 0.19 game UI — a player-name input. What's the recommended way to do this in 0.19?",
+      "prompt": "I need a simple text entry field in my Bevy 0.20 game UI — a player-name input. What's the recommended way to do this in 0.20?",
       "expected_behavior": [
-        "Recommends the EditableText widget (new first-class text input in 0.19), spawned as a component on a Node entity.",
-        "Mentions it integrates with the InputFocus resource, and that InputFocus fields are private — use get()/set(entity, FocusCause::...)/clear().",
-        "Mentions reading the value via editable.value() and/or the TextEditChange event, and that bevy_ui_widgets is in default features now (no experimental feature flag needed).",
-        "May mention FeathersTextInput as the themed alternative, or TabNavigationPlugin/TabIndex for focus — without fabricating APIs.",
-        "Does not hand-roll keyboard-event parsing as the primary recommendation when EditableText exists."
+        "Recommends the bevy_ui_widgets TextInput component as the widget, noting that it #[require]s EditableText — inserting EditableText alone renders a field that ignores all typing in 0.20.",
+        "Mentions it integrates with the InputFocus resource, and that InputFocus fields are private — use get()/set(entity, FocusCause::...)/clear(); a TabIndex is what makes it click-focusable.",
+        "Mentions reading the value via editable.value() and/or the TextEditChange event, and that bevy_ui_widgets is in default features (no experimental feature flag needed).",
+        "If read-only is discussed, uses the separate TextReadWriteMode component (Editable/ReadOnly/Static), not a field on TextInput.",
+        "May mention FeathersTextInput as the themed alternative, or TabNavigationPlugin/TabIndex for Tab-key focus — without fabricating APIs.",
+        "Does not hand-roll keyboard-event parsing as the primary recommendation."
       ]
     },
     {
       "id": 10,
       "name": "bsn-scene-composition",
-      "prompt": "I'm building a settings menu in Bevy 0.19 and heard about the new bsn! scene system. How do I define a reusable button widget and compose a small menu from it, and how do I get it into the world?",
+      "prompt": "I'm building a settings menu in Bevy 0.20 and heard about the new bsn! scene system. How do I define a reusable button widget and compose a small menu from it, and how do I get it into the world?",
       "expected_behavior": [
         "Uses the bsn! macro to define scenes, with reusable scene fragments as functions returning impl Scene (e.g. fn button(label: &str) -> impl Scene).",
-        "Composes children with Children [ ... ] and attaches behavior with on(|e: On<...>, ...| { ... }) observers inline.",
+        "Includes scene fragments with the required @ prefix (e.g. @button(\"Ok\")) — a bare button(\"Ok\") is a component-value insert in 0.20 and does not compile as a scene include.",
+        "Separates sibling entities inside Children [ ... ] with -- (comma/parenthesis forms are deprecated in 0.20), and attaches behavior with on(|e: On<Activate>, ...| { ... }) observers inline.",
         "Spawns the scene with commands.spawn_scene(...) / world.spawn_scene(...) (or the fn.spawn() startup-system idiom) — NOT via a SceneRoot/WorldAssetRoot component (those are for the old/glTF system).",
-        "Does not claim .bsn files can be loaded yet, and does not claim glTF uses BSN — both are explicitly not ready in 0.19.",
-        "Does not fabricate BSN syntax; patches, scene-fn composition via bare calls (e.g. button(\"Ok\") inside bsn!, NOT a :fn syntax), and @SceneComponent { @prop } usage (if shown) match the real macro."
+        "Does not claim .bsn files can be loaded yet, and does not claim glTF uses BSN — both are still not ready in 0.20.",
+        "Does not fabricate BSN syntax; patches, @-prefixed scene includes, and @SceneComponent { @prop } usage (if shown) match the real macro, and enum patches spell out every field of the variant."
       ]
     },
     {
       "id": 11,
       "name": "light-shadow-fields",
-      "prompt": "After upgrading my Bevy game to 0.19, `PointLight { shadows_enabled: true, ..default() }` no longer compiles — no field `shadows_enabled`. What changed?",
+      "prompt": "After upgrading my Bevy game from 0.18 to 0.20, `PointLight { shadows_enabled: true, ..default() }` no longer compiles — no field `shadows_enabled`. What changed?",
       "expected_behavior": [
         "Explains that 0.19 renamed shadows_enabled -> shadow_maps_enabled on PointLight (and DirectionalLight/SpotLight), because lights now also support contact shadows.",
         "Gives the fix: PointLight { shadow_maps_enabled: true, ..default() }.",
         "May correctly mention the new contact_shadows_enabled field (and that contact shadows need a ContactShadows component on the camera) without fabricating other APIs.",
         "Does not suggest reverting Bevy or invent an unrelated fix."
+      ]
+    },
+    {
+      "id": 12,
+      "name": "observer-generic-move",
+      "prompt": "I'm upgrading a Bevy game from 0.19 to 0.20 and my observers stopped compiling: `fn on_spawn(add: On<Add, Enemy>, mut commands: Commands)` gives \"struct takes 1 generic argument but 2 were supplied\". A pointer observer `fn on_click(click: On<Pointer<Press>>)` also fails. What changed and how do I fix both?",
+      "expected_behavior": [
+        "Explains that the Bundle parameter moved off On<E, B> and into the lifecycle events: On<Add<Enemy>>, On<Insert<T>>, On<Discard<T>>, On<Remove<T>>, On<Despawn<T>>.",
+        "Explains that pointer events were flattened: Pointer<Press> is now PointerPress, so the observer is On<PointerPress>, and the pointer data is a field (ev.pointer.id, ev.pointer.position) rather than a wrapper.",
+        "Does not claim Trigger<E> is the fix (that rename was 0.17) and does not invent an On<Add, Enemy> compatibility shim.",
+        "May correctly mention the EventPattern trait, tuples as OR filters (On<Add<(A, B)>>), On<Add<()>> plus .with_component(id) for dynamic components, or the PointerEvent trait for code generic over pointer events — without fabricating API names."
+      ]
+    },
+    {
+      "id": 13,
+      "name": "wesl-shader-migration",
+      "prompt": "My Bevy custom material's shader stopped compiling after upgrading to 0.20 — errors on `#import bevy_pbr::forward_io::VertexOutput` and on my `#ifdef MY_FLAG` blocks. What happened to shaders in 0.20 and what do I change?",
+      "expected_behavior": [
+        "Explains that naga_oil is gone and Bevy's shading language is WESL; .wgsl files with preprocessor directives must become .wesl.",
+        "Gives concrete translations: `import bevy_pbr::render::forward_io::VertexOutput;` (semicolon-terminated, imports at the top of the file), @if(FLAG) in place of #ifdef, and constants::NAME in place of #{NAME}.",
+        "Notes that plain WGSL with no directives keeps working unchanged, and that the shader_format_wesl / shader_format_glsl Cargo features are gone (GLSL support removed).",
+        "Mentions that module paths mirror the crate layout, so old import paths may need an extra segment (bevy_pbr::render::forward_io, not bevy_pbr::forward_io).",
+        "Does not suggest keeping naga_oil, and does not invent WESL syntax."
+      ]
+    },
+    {
+      "id": 14,
+      "name": "button-widget-migration",
+      "prompt": "In my Bevy 0.20 UI, `Query<&Interaction, (Changed<Interaction>, With<Button>)>` now warns about deprecated items and my buttons don't respond. What's the current way to make a clickable button?",
+      "expected_behavior": [
+        "Explains that bevy::ui::Button and bevy::ui::Interaction are deprecated in 0.20 in favor of bevy::ui_widgets::Button with the Hovered and Pressed components.",
+        "Warns that bevy::prelude still exports the deprecated Button, so ui_widgets::Button must be imported explicitly (a bare Button with both in scope is an ambiguity error).",
+        "Gives a replacement query shape using Hovered (a newtype over bool) and Pressed / Has<Pressed> (a unit marker) — does not treat Pressed as carrying a value.",
+        "Mentions observing the Activate event (or an on(...) observer) as the idiomatic click handler rather than polling Interaction.",
+        "May correctly mention that ui_widgets::Button only requires AccessibilityNode, so Node and Hovered are inserted by the caller, or point at bevy_feathers for themed buttons — without fabricating APIs."
       ]
     }
   ]

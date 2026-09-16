@@ -3,16 +3,17 @@
 ## Contents
 - When to panic — almost never; useful Clippy lints
 - Result-returning systems — `Result<(), BevyError>`, `?` with `thiserror`
+- Attaching context / ad-hoc errors (0.20) — `.context` / `.with_context`, `bevy_error!` / `bail!` / `ensure!`
 - Configuring the global handler — presets, dev/release feature gating
 - Per-call severity — `with_severity`, `map_severity`
 - Recoverable failures via match / let-else / if-let
 - Fallible system params — `Single<...>`, `Option<Res<T>>` for silent skip
 - Piping handlers — `system.pipe(handler)` for per-system logic
 - Errors in commands — `queue_handled`, `queue_silenced`
-- Combinator semantics (0.18) — `or`/`and` no longer propagate errors
+- Combinator semantics — `and`/`or` removed (0.20); `and_then`/`or_else` treat a failed param as `false`
 - When to use what — decision table
 
-Bevy distinguishes three failure tiers: panic (fatal by default — but catchable as of 0.19, see below), `Err` from a system (recoverable, routed to a global handler), and silent skip (fallible system params).
+Bevy distinguishes three failure tiers: panic (fatal by default — but catchable as of 0.20, see below), `Err` from a system (recoverable, routed to a global handler), and silent skip (fallible system params).
 
 ## When to panic
 
@@ -24,7 +25,7 @@ Almost never in application code. `unwrap`, `expect`, and `panic!` should be res
 
 If you find yourself reaching for `unwrap` because "this can't fail," ask whether the failure mode is *truly* impossible or just unlikely. Unlikely failure modes find their way to production eventually.
 
-As of 0.19, a panic inside a system, command, or observer is caught, converted to an error, and routed through the same `FallbackErrorHandler` rather than tearing down the whole app. The default handler still re-panics (so dev behavior is unchanged), but you can configure it to log-and-continue — valuable for long-running processes (editors, installations) where one tool's bug shouldn't lose unsaved work. This widens what the global handler governs, but `unwrap`/`panic!` still signal "broken state," so the guidance above stands.
+As of **0.20**, a panic inside a system, run condition, or command is caught, converted to a `BevyError` with `Severity::Panic` carrying the panic payload, and routed through the same `FallbackErrorHandler` rather than tearing down the whole app. The default handler resumes the unwind with the original payload (so dev behaviour is unchanged), but a logging handler now keeps a long-running process (editor, installation) alive through a panicking system. Observers have no catch of their own — an observer panic is caught by the enclosing system or command and reported against that. One-shot `world.run_system*` is not covered. A custom handler can inspect the payload with `error.take_payload()`. `unwrap`/`panic!` still signal "broken state," so the guidance above stands.
 
 Useful Clippy lints to enforce this:
 
@@ -69,7 +70,36 @@ fn save_game(/* ... */) -> Result {
 }
 ```
 
-Bevy controls system execution, so it controls what happens when a system returns `Err`. The default global handler **panics** on `Err` — loud and helpful during development.
+Bevy controls system execution, so it controls what happens when a system returns `Err`. The default global handler is `match_severity`: it dispatches on the error's `Severity`, and every `BevyError` defaults to `Severity::Panic` — so an unannotated `Err` **panics**, loud and helpful during development.
+
+### Attach context (0.20)
+
+`ContextExt` (in the prelude) adds anyhow-style `.context(msg)` / `.with_context(|| msg)` to any `Result<T, E: Into<BevyError>>` **and** to `Option<T>`, both yielding `Result<T, BevyError>`:
+
+```rust
+fn load_save(paths: Res<SavePaths>, active: Res<ActiveSlot>) -> Result {
+    let path = paths.by_slot.get(&active.0)
+        .context("active save slot has no path")?;              // Option -> Result
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    // ...
+    Ok(())
+}
+```
+
+One context prints as `msg: inner error`; two or more print the newest message then a `Caused by:` chain down to the root. Downcasting to the original error type still works on the `Result` path (on the `Option` path the message *is* the error). Prefer this over `unwrap`/`expect` in systems — you keep the message *and* the handler's severity policy.
+
+### Ad-hoc errors (0.20)
+
+`bevy_error!`, `bail!` (return `Err` early) and `ensure!` build a `BevyError` from a string literal. They are `#[macro_export]`ed at the crate root, **not** in the prelude: `use bevy::ecs::{bail, bevy_error, ensure};` (`Severity` and `Result` are in the prelude). Severity is optional and defaults to `Severity::Panic`; it goes first for `bevy_error!`/`bail!`, after the condition for `ensure!`:
+
+```rust
+ensure!(score >= 0, "score must not be negative: {}", score);
+ensure!(score <= 100, Severity::Warning, "score too high: {}", score);
+if val == 0 { bail!("value can't be zero"); }
+```
+
+**Pitfall:** with a lone string literal these macros do **not** call `format!`, so `bail!("bad {x}")` emits the text `bad {x}` verbatim. Always pass at least one positional argument: `bail!("bad {}", x)`.
 
 ## Configuring the global handler
 
@@ -87,24 +117,24 @@ fn main() {
 
 Available presets:
 
-- `panic` (default) — `panic!` on any `Err`. Loud crashes.
-- `error` — log at error level.
-- `warn` — log at warn level.
-- `info`, `debug`, `trace` — log at lower levels.
+- `match_severity` (**default**) — dispatch on `err.severity()`: `Ignore` drops, `Trace`…`Error` log at that level, `Panic` panics. The only preset that honours `.with_severity(...)` / `.map_severity(...)` / `.ignore()`.
+- `panic` — always `panic!`, ignoring severity (it reads severity only to resume the original unwind of a caught panic).
+- `error`, `warn`, `info`, `debug`, `trace` — always log at that level, ignoring severity.
 - `ignore` — drop the error silently.
 
-Pattern: feature-flag the choice between dev (panic) and release (warn):
+Pattern: keep the default in dev, log in release:
 
 ```rust
-#[cfg(debug_assertions)]
-app.set_error_handler(panic);
+// Debug: leave the default `match_severity` so per-call severity still works.
 #[cfg(not(debug_assertions))]
 app.set_error_handler(warn);
 ```
 
+**Pitfall:** installing any preset other than `match_severity` — including `panic` — makes `.with_severity(...)` / `.map_severity(...)` / `.ignore()` inert; every error takes the preset's action regardless of severity. `set_error_handler` also asserts if called more than once on an `App`.
+
 **Library plugins must never call `set_error_handler`.** It's an application-level policy. A library that overrides it surprises every consumer.
 
-(0.19 renamed the underlying handler-of-last-resort resource `DefaultErrorHandler` → `FallbackErrorHandler`, and the method `default_error_handler` → `fallback_error_handler`. `App::set_error_handler` is unchanged. A deprecated `DefaultErrorHandler` alias eases migration for one release.)
+(0.19 renamed the handler-of-last-resort resource `DefaultErrorHandler` → `FallbackErrorHandler` and the method `default_error_handler` → `fallback_error_handler`; the deprecated `DefaultErrorHandler` alias was removed in 0.20. `App::set_error_handler` is unchanged.)
 
 ## Per-call severity
 
@@ -209,7 +239,7 @@ fn use_assets(assets: Option<Res<EnemyAssets>>) {
 }
 ```
 
-`Res<T>` (without `Option`) panics if `T` isn't inserted — useful when you've gated the system behind a `run_if(resource_exists::<T>)` so the panic is genuinely impossible.
+`Res<T>` (without `Option`) fails param validation when `T` isn't inserted, and that failure carries `Severity::Panic` — so it panics under the default `match_severity` handler but only logs, and skips the system for that tick, under `warn`. Use bare `Res<T>` when you've gated the system behind `run_if(resource_exists::<T>)` (or, 0.20, `resource_exists_and(|r: &T| …)`) so the failure is impossible; if the resource legitimately may be absent, use `Option<Res<T>>` or `If<Res<T>>` to skip silently.
 
 If you're writing a custom `SystemParam` that may fail validation: in 0.19 the separate `validate_param` method was **removed** and folded into `get_param`, which now returns `Result<Self::Item, SystemParamValidationError>`. Do your validation there and return the error instead of the item:
 
@@ -300,17 +330,25 @@ commands.queue_silenced(/* ... */);
 
 `EntityCommands` errors automatically when the target entity is despawned before the command runs — it returns an entity-doesn't-exist error to the global handler. Most of the time this is what you want; if you need to suppress it, use `queue_silenced` or check the entity's existence first.
 
-## Combinator semantics (0.18)
+## Combinator semantics
 
-System combinators (`a.or(b)`, `a.and(b)`, `a.xor(b)`, etc.) used to propagate errors. In 0.18, they treat a failed combined system as `false`:
+Run-condition combinators treat a combined condition whose params fail validation as `false` rather than propagating the error (0.18+).
+
+**(0.20) the `and`/`or`/`nand`/`nor` methods are gone** (deprecated in 0.19, removed in 0.20, and no migration guide mentions it). Pick short-circuit or eager explicitly. `xor`/`xnor` are unchanged.
+
+| Removed in 0.20 | Short-circuit | Eager |
+| --- | --- | --- |
+| `a.and(b)` | `a.and_then(b)` | `a.and_eager(b)` |
+| `a.or(b)` | `a.or_else(b)` | `a.or_eager(b)` |
+| `a.nand(b)` | `a.nand_then(b)` | `a.nand_eager(b)` |
+| `a.nor(b)` | `a.nor_else(b)` | `a.nor_eager(b)` |
 
 ```rust
-// 0.17
-fails_validation.or(always_true)  // returned Err if fails_validation failed
-
-// 0.18
-fails_validation.or(always_true)  // fails_validation = false, always_true = true → returns true
+// `fails_validation` evaluates to false, `always_true` to true → the condition is true
+system.run_if(fails_validation.or_else(always_true))
 ```
+
+Short-circuit variants skip the second condition when the first decides the result, so a `Local`-, `MessageReader`- or change-detection-based second condition only observes what accumulated since it last ran. Use `*_eager` when both must run every evaluation (e.g. `state_changed::<A>.or_eager(state_changed::<B>)`).
 
 This is more useful for run conditions where "the param isn't available, skip it" should mean "this condition is false," not "the entire system fails."
 
@@ -326,5 +364,6 @@ This is more useful for run conditions where "the param isn't available, skip it
 | Recoverable failure with per-call severity | `.with_severity(...)?` or `.map_severity(...)?` |
 | Recoverable failure with custom logic | `match` / `let-else` / `if-let` in the system body |
 | Recoverable failure with custom handler for one system | `system.pipe(handler)` |
-| Production build error policy | `app.set_error_handler(warn)` (gated by feature flag) |
+| Production build error policy | `#[cfg(not(debug_assertions))] app.set_error_handler(warn)`; leave the `match_severity` default in debug |
 | Custom error types | `thiserror` + Bevy `Result`'s blanket `From` |
+| Add a human-readable message / turn `Option` into an error | `.context("…")?` / `.with_context(\|\| …)?` (0.20) |

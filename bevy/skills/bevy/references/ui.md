@@ -1,15 +1,15 @@
 # UI
 
 ## Contents
-- The `Node` component — flexbox layout fields
-- `Val` and helpers — `px`/`percent`/`vw`/`vh`, fluent `UiRect` builders
+- The `Node` component — flexbox layout fields; viewport-anchored `FixedNode` (0.20)
+- `Val` and helpers — `px`/`percent`/`vw`/`vh`, plus `em`/`rem` (0.20), fluent `UiRect` builders
 - `UiTransform` — UI-specific 2D transform (replaces `Transform` on UI nodes)
-- Visual components — `BackgroundColor`, `BorderColor`, text (`FontSource`/`FontSize`, 0.19)
+- Visual components — `BackgroundColor`, `BorderColor`, text (`FontSource`/`FontSize`, 0.19; generic-family ctors, fallback lists, `Rem(1.)` default, 0.20); inline images and boxes (`InlineImage`/`InlineBox`, 0.20)
 - Update patterns — `Text` deref, visibility toggling
 - Marker pattern for HUD elements — spawn-and-update idiom
-- Headless widgets (0.19: no longer experimental) — `Button`, `Slider`, etc.; events; state components
-- Text input (0.19) — `EditableText`, `InputFocus`, `FeathersTextInput`
-- Feathers (0.19: no longer experimental) — themed widget set for tooling, now BSN-based
+- Headless widgets (0.19: no longer experimental) — `Button`, `Slider`, `ListBox`, `TabList`, `Dialog` (0.20); events; state components
+- Text input (0.19; split in 0.20) — `TextInput` + `EditableText`, `TextReadWriteMode`, `InputFocus`, `FeathersTextInput`
+- Feathers (0.19: no longer experimental) — themed widget set for tooling, BSN-only in 0.20; contextual theming
 - Auto directional navigation (0.18) — gamepad/keyboard navigation
 - Popovers and menus (0.18) — `Popover`, `MenuPopup`
 - Pickable text spans (0.18) — per-glyph picking; non-text-area picking gone
@@ -47,7 +47,18 @@ Most flexbox properties have direct fields on `Node`:
 - `justify_content` / `align_items` — main-axis and cross-axis alignment.
 - `width`, `height`, `min_width`, `max_width`, `min_height`, `max_height`.
 - `padding`, `margin`, `border` — `UiRect` of `Val`s.
-- `border_radius` (0.18 — folded into `Node`, used to be a separate component).
+- `border_radius` (0.18 — folded into `Node`, used to be a separate component). **(0.20)** each corner is a `CornerRadius { x: Val, y: Val }` so corners can be elliptical. `BorderRadius::all(px(8))` and `border_radius: px(8).into()` still work (`Val: Into<CornerRadius>` gives a circular corner); struct literals need `top_left: px(8).into()` or `CornerRadius::circular(px(8))`, and `CornerRadius::new(px(10), px(20))` / `[px(10), px(20)]` give an elliptical one. The `Into<CornerRadius>`-taking constructors are no longer `const`; `BorderRadius::px(..)`/`percent(..)` still are.
+- `FixedNode` (0.20) — a marker (`#[require(Node)]`) that lays the node out against the target camera's viewport even when it has a UI parent, ignoring the parent's layout, scroll, transform and clip rect (CSS `position: fixed`). Handy for tooltips and modals parented to a scroll container so despawn-with-parent still works. Draw order still follows the hierarchy — pair it with `GlobalZIndex`.
+
+```rust
+children![(
+    FixedNode,
+    Node { position_type: PositionType::Absolute, right: px(16), bottom: px(16),
+           width: px(100), height: px(100), ..default() },
+    GlobalZIndex(1),
+    BackgroundColor(YELLOW.into()),
+)]
+```
 
 ## `Val` and helpers
 
@@ -58,6 +69,8 @@ Most flexbox properties have direct fields on `Node`:
 - `Val::Percent(f32)` — percentage of parent.
 - `Val::Vw(f32)`, `Val::Vh(f32)` — viewport width/height units.
 - `Val::VMin(f32)`, `Val::VMax(f32)` — min/max of viewport dimensions.
+- `Val::Em(f32)` (0.20) — multiple of the node's own font size, read from its `EmSize` component (required by `Node`, default 20 px).
+- `Val::Rem(f32)` (0.20) — multiple of the root font size (`RemSize` resource, default 20 px). Change the resource to scale the whole UI.
 
 In 0.17+, helper functions accept any integer type:
 
@@ -70,8 +83,12 @@ vw(10)         // Val::Vw(10.0)
 vh(10)         // Val::Vh(10.0)
 vmin(5)        // Val::VMin(5.0)
 vmax(5)        // Val::VMax(5.0)
+em(1.5)        // Val::Em(1.5)   (0.20)
+rem(2)         // Val::Rem(2.0)  (0.20)
 auto()         // Val::Auto
 ```
+
+**Pitfall (0.20): `em` is not inherited.** `EmSize` is per-entity, and bevy_ui derives it only from a `TextFont` on the *same* entity — nothing propagates it down the hierarchy. A container with no `TextFont` keeps the 20 px default no matter what its children use, and that default does not track `RemSize`. Set `EmSize(px)` on the container yourself, propagate `TextFont` with `Propagate(TextFont { .. })`, or use `rem()` for hierarchy-independent sizing. Grid tracks have `GridTrack::em(5.)` / `GridTrack::rem(10.)` too (those take `f32`).
 
 `UiRect` has fluent builders:
 
@@ -118,14 +135,14 @@ commands.spawn((
 
 0.19 swapped the text backend from `cosmic-text` to `parley`. Most of it is invisible, but two `TextFont` fields changed type:
 
-- **`font` is now a `FontSource`.** Variants: `Handle(Handle<Font>)` (`asset_server.load(...).into()` converts for you), `Family("FiraMono".into())` (resolve by name), and semantic categories `Serif`, `SansSerif`, `Cursive`, `Fantasy`, `Monospace`, plus UI-specific `SystemUi`, `Emoji`, `Math`, etc. Enable the `system_font_discovery` feature to make installed system fonts resolvable by family name (needs `fontconfig` on Linux). Override the generic-family defaults via the `FontCx` resource (`set_serif_family`, `set_monospace_family`, …).
-- **`font_size` is now a `FontSize` enum.** `FontSize::Px(24.0)` is the unchanged behavior; `Vw`, `Vh`, `VMin`, `VMax` are viewport-relative, and `Rem(1.5)` scales with the `RemSize` resource (one knob to resize all relative text). `TextFont::from_font_size(FontSize::Px(24.0))` and `.with_font(handle)` / `.with_family("…")` are convenience constructors.
+- **`font` is now a `FontSource`.** Variants: `Handle(Handle<Font>)` (`asset_server.load(...).into()` converts for you), `Family(SmolStr)` (exact family name — `FontSource::family("FiraMono")`), and **(0.20)** `Families(SmolStr)` for a CSS-style fallback list (`FontSource::families("Arial, 'Noto Sans', sans-serif")`), `List(Vec<FontSource>)` for an ordered chain of any sources (`FontSource::list([handle.into(), FontSource::sans_serif()])`), and `Generic(GenericFontFamily)` for semantic categories — built with `FontSource::sans_serif()`, `serif()`, `monospace()`, `cursive()`, `fantasy()`, `system_ui()`, `emoji()`, `math()`, …, since the 0.19 unit variants (`FontSource::SansSerif`, …) are **gone**. Note `"Fira Sans".into()` now yields `Families` (parsed as a CSS list), so use `FontSource::family(..)` for a literal name. Enable the `system_font_discovery` feature to resolve installed system fonts by family name (needs `fontconfig` on Linux). Override the generic-family defaults via the `FontCx` resource (`set_generic_family(GenericFontFamily::Monospace, "JetBrains Mono")`).
+- **`font_size` is now a `FontSize` enum.** `FontSize::Px(24.0)` is the unchanged behavior; `Vw`, `Vh`, `VMin`, `VMax` are viewport-relative, and `Rem(1.5)` scales with the `RemSize` resource (one knob to resize all relative text). **(0.20) `TextFont::default()` is `FontSize::Rem(1.)`, not `Px(20.)`** — same 20 px by default, but every `TextFont` left at the default (UI `Text` and `Text2d` alike) now follows `RemSize`. Pin a fixed size with `font_size: FontSize::Px(20.)`. (`FontSize::default()` itself is still `Px(20.)`.) `TextFont::from_font_size(FontSize::Px(24.0))` and `.with_font(handle)` / `.with_family("…")` are convenience constructors.
 
 Variable-font fields on `TextFont`: `weight: FontWeight` (now a named-constant API, `FontWeight::BOLD` = 700, any value 1–1000; the field existed in 0.18 as `FontWeight(400)`), plus the genuinely-new `width: FontWidth` (`ULTRA_CONDENSED`…`ULTRA_EXPANDED`) and `style: FontStyle` (`Normal`/`Italic`/`Oblique`):
 
 ```rust
 TextFont {
-    font: FontSource::SansSerif,
+    font: FontSource::sans_serif(),
     weight: FontWeight::BOLD,
     style: FontStyle::Italic,
     ..default()
@@ -149,6 +166,22 @@ Text background colors:
 ```rust
 commands.spawn((Text::new("Important"), TextBackgroundColor(Color::RED)));
 ```
+
+### Inline images and boxes (0.20)
+
+`InlineImage` is a text child, like `TextSpan`, that flows an image with the text. It is in the prelude, `#[require]`s `InlineBox`, and is sized from the image asset once it loads (until then it is a zero-size out-of-flow box that displaces nothing). UI `Text` only — `Text2d` supports the underlying `InlineBox` but has no built-in image drawing.
+
+```rust
+commands.spawn((
+    Text::new("Press "),
+    children![
+        InlineImage { image: asset_server.load("ui/key_a.png"), ..default() },
+        TextSpan::new(" to jump"),
+    ],
+));
+```
+
+For custom content use `InlineBox` directly (`use bevy::text::{InlineBox, InlineBoxKind};` — not in the prelude): `InlineBox { kind: InlineBoxKind::InFlow, size: Vec2::splat(24.) }` reserves space in logical pixels; read the placed rectangles back from `TextLayoutInfo::inline_boxes` (`Vec<(Entity, InlineBoxKind, Rect)>`, physical pixels relative to the layout's top-left) and draw them yourself. `InlineBox::default()` is `OutOfFlow` with zero size, so it gets a position but takes no space. Inline boxes are leaves — `TextSpan` children under one are ignored — and, like `TextSpan`, must be descendants of a root `Text`/`Text2d`.
 
 ## Update patterns
 
@@ -174,7 +207,7 @@ fn hide_panel(mut node: Single<&mut Node, With<Panel>>) {
 }
 ```
 
-`Display::None` removes the node from layout entirely (siblings reflow). For "make invisible but preserve layout," set `BackgroundColor::NONE` and toggle the alpha — or use `Visibility::Hidden`, which is honored by UI rendering but doesn't remove the node from layout.
+`Display::None` removes the node from layout entirely (siblings reflow). For "make invisible but preserve layout," set `BackgroundColor(Color::NONE)` (the same value as `BackgroundColor::DEFAULT`) or toggle the colour's alpha — or use `Visibility::Hidden`, which is honored by UI rendering but doesn't remove the node from layout.
 
 ## Marker pattern for HUD elements
 
@@ -211,28 +244,48 @@ The marker component pattern lets you spawn any number of HUD elements and updat
 
 As of 0.19 these are **no longer experimental**: the feature was renamed `experimental_bevy_ui_widgets` → `bevy_ui_widgets` and folded into the `ui` collection (and thus default features), and the `UiWidgetsPlugins` plugin group is now part of `DefaultPlugins` (so is `InputDispatchPlugin`) — remove any manual `add_plugins(UiWidgetsPlugins)` if you have `DefaultPlugins`. The widgets:
 
-- **`Button`** — emits `Activate` events when clicked or activated by keyboard.
+- **`Button`** (`bevy::ui_widgets::Button` — **import it explicitly**) — emits `Activate` when clicked or activated by keyboard. **(0.20)** `bevy::prelude::Button` is the deprecated `bevy_ui` marker, which never fires `Activate`; an explicit `use bevy::ui_widgets::Button;` shadows the prelude glob. `ui_widgets::Button` requires only `AccessibilityNode`, so add `Node` and `Hovered::default()` yourself. `ActivateOnPress` fires on pointer-down instead of release.
 - **`Slider`** — `f32` value in a range; emits `ValueChange<f32>`.
 - **`Scrollbar`** — scrolls a parent container. (0.19 dropped the `Core` prefix: `CoreScrollbarThumb` → `ScrollbarThumb`, `CoreScrollbarDragState` → `ScrollbarDragState`, `CoreSliderDragState` → `SliderDragState`.)
 - **`Checkbox`** — boolean, emits `ValueChange<bool>`.
 - **`RadioButton`** + **`RadioGroup`** — exclusive selection.
+- **`ListBox`** + **`ListItem`** — exclusive selection from a list; emits `ValueChange<Entity>`. (0.20) adds the `SetSelected { entity, row }` event for programmatic selection.
+- **`MenuButton`/`MenuItem`/`MenuPopup`**, **`Popover`**, **`ScrollArea`** — menus, floating placement, and wheel/trackpad scrolling on an `overflow: scroll` node.
+- **`TabList` + `Tab` (0.20)** — headless tab strip. `TabList { orientation, activation }` requires `SelectedTab(Option<Entity>)`, which *owns* the selection: click, Enter/Space, or (with `TabActivation::Automatic`) arrow-key focus moves emit `ValueChange<Option<Entity>>` as a *request* — apply it yourself or attach `on(tablist_self_update)`. `Tab` requires `Selectable` and a roving `TabIndex(-1)`, and gets the derived `bevy::ui::Selected` marker but **not** `Hovered`. `TabNavigationPlugin` is still not in `DefaultPlugins` — add it plus an ancestor `TabGroup` for Tab/Shift+Tab into the strip.
+- **`Dialog` / `ModalDialog` (0.20)** — `Dialog` is a movable floating window (`DialogDragHandle` marks the drag region; `DialogPlugin` manages z-order). `ModalDialog` requires `Dialog` and traps focus, and expects you to spawn a full-screen ancestor carrying `ModalDialogBarrier`. Nothing closes itself: barrier click or Escape triggers the propagating `RequestClose { source }` entity event — observe it and despawn `close.event_target()`. Feathers ships themed `FeathersDialog`/`FeathersFloatingDialog`.
 
 Headless = no styling. Bevy provides the behavior (events, accessibility, keyboard navigation), you provide visual treatment. The widget set is still immature and will see breaking changes, but it's stable enough for general use now.
 
-Boolean state components used by widgets:
+State components used by widgets:
 
-- **`Hovered`** — true while pointer is over.
-- **`Pressed`** — true while button-like widget is held down.
-- **`Checked`** — current state of toggleable widgets.
-- **`InteractionDisabled`** — disable interaction (for "grayed out" states).
+- **`Hovered(bool)`** — `bevy::picking::hover::Hovered`, **not** in the prelude. It is `#[component(immutable)]` and the picking backend keeps it current by re-inserting it, and it is **opt-in**: `ui_widgets::Button` does not require it, so spawn `Hovered::default()` yourself or `&Hovered` queries match nothing. Read `hovered.get()`, filter `Changed<Hovered>`, or observe `On<Insert<Hovered>>`.
+- **`Pressed`**, **`Checked`**, **`Checkable`**, **`InteractionDisabled`** — `bevy::ui`, **unit markers** (present = true), inserted and removed by the widget. There is no `.0`: query with `Has<Pressed>` / `With<Checked>`. `Changed<Pressed>` only matches on insertion, never on removal — poll each frame, or observe `On<Add<Pressed>>` / `On<Remove<Pressed>>`.
+- **`Selected`** — derived marker set from `SelectedTab` / `ListBox` selection.
 
-These are detectable via change detection (`Changed<Hovered>` etc.).
+```rust
+use bevy::{picking::hover::Hovered, prelude::*, ui::Pressed, ui_widgets::Button};
+
+fn style_buttons(mut q: Query<(&Hovered, Has<Pressed>, &mut BackgroundColor), With<Button>>) {
+    for (hovered, pressed, mut bg) in &mut q {
+        *bg = match (hovered.get(), pressed) {
+            (_, true) => PRESSED,
+            (true, false) => HOVERED,
+            _ => NORMAL,
+        }.into();
+    }
+}
+```
+
+`bevy::ui::Interaction` is deprecated in 0.20 — replace `Query<&Interaction, Changed<Interaction>>` and `match Interaction::{Pressed, Hovered, None}` with the query above, or react to `On<Activate>`.
 
 Events:
 
 ```rust
+use bevy::{picking::hover::Hovered, prelude::*, ui_widgets::{Activate, Button}};
+
 commands.spawn((
     Button,
+    Hovered::default(),
     Node { /* style */ },
     BackgroundColor(Color::WHITE),
 )).observe(|activate: On<Activate>, /* ... */| {
@@ -244,25 +297,48 @@ Or globally:
 
 ```rust
 commands.add_observer(|change: On<ValueChange<f32>>, /* ... */| {
-    info!("Slider changed to {}", change.0);
+    // `source` is the emitting widget; `is_final` is false while dragging, true on release.
+    info!("Slider {} changed to {} (final: {})", change.source, change.value, change.is_final);
 });
 ```
 
-## Text input (0.19)
+## Text input (0.19; split in 0.20)
 
-`EditableText` is the first-class editable-text widget added in 0.19. Spawning an entity with it gives you a working (unstyled) text field: keyboard editing, cursor navigation (arrows, Home/End, word-level with Ctrl/Alt), selection (Shift+arrows, click-drag, double/triple-click), backspace/delete, OS clipboard (with the `system_clipboard` feature) or in-app buffer, unicode-aware navigation, bidirectional text, IME for CJK, multiline + scrolling, and per-character filtering via `EditableTextFilter`.
+A text field is **two components in 0.20**. `EditableText` (`bevy::text`) is the **state**: value, cursor, selection, `viewport`, `max_characters`, `visible_width`, `visible_lines`, `allow_newlines`. `TextInput` (`bevy::ui_widgets`, a unit struct that `#[require]`s `EditableText`) is the **widget**: keyboard editing, cursor navigation (arrows, Home/End, word-level with Ctrl/Alt), selection (Shift+arrows, click-drag, double/triple-click), backspace/delete, OS clipboard (with the `system_clipboard` feature) or in-app buffer, unicode-aware navigation, bidirectional text, IME for CJK, multiline + scrolling, and per-character filtering via `EditableTextFilter`.
+
+In 0.19 those observers matched any `EditableText`; in 0.20 every one of them filters `With<TextInput>`, so **an entity with only `EditableText` renders and takes focus but ignores all input.** Neither type is in the prelude. The plugin is `TextInputPlugin` (was `EditableTextInputPlugin`), already in `UiWidgetsPlugins`.
 
 ```rust
+use bevy::text::{EditableText, TextCursorStyle};
+use bevy::ui_widgets::TextInput;
+
 commands.spawn((
     Node { width: px(200), border: px(2).all(), padding: px(8).all(), ..default() },
     BorderColor::from(Color::WHITE),
     BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
-    EditableText::default(),
+    TextInput,                                        // behavior (0.20)
+    EditableText { allow_newlines: false, ..default() },   // state
     TextFont { font_size: FontSize::Px(24.0), ..default() },
     TextCursorStyle::default(),
-    TabIndex(0),   // add TabNavigationPlugin for tab-to-focus
+    TabIndex(0),   // click-to-focus needs a TabIndex; add TabNavigationPlugin for Tab-key focus
 ));
 ```
+
+**Read-only / display-only** is the separate `bevy::text::TextReadWriteMode` component (required by `EditableText`, default `Editable`), not a `TextInput` field: `ReadOnly` keeps cursor movement, selection and copy but drops destructive edits; `Static` is display-only and also ignores pointer press/drag.
+
+**Scrolling (0.20):** the `TextScroll` component and `scroll_editable_text` system are gone. Scroll state lives in `editable.viewport` (a `TextViewport { offset: Vec2, size: Vec2 }`): read it to drive a custom scrollbar, and scroll with `editable.queue_edit(TextEdit::ScrollBy(delta))` / `ScrollTo` / `ScrollByLines`, or by writing `viewport.offset`. `viewport.size` is synced to the node's content box — don't set it. Cursor reveal is automatic; `cursor_margin` (default `Vec2::splat(0.2)`, a fraction of the viewport) tunes the inset.
+
+**Escape blurs and bubbles (0.20).** Escape in a focused field collapses the selection, clears `InputFocus` on the press, and *keeps propagating* `FocusedInput<KeyboardInput>` to ancestors and the window (0.19 consumed it), so a dialog-cancel observer on an ancestor fires on the same press. For two-step behaviour, test the original target — `InputFocus` is already empty and `focused_entity` is rewritten at each hop:
+
+```rust
+fn on_escape(input: On<FocusedInput<KeyboardInput>>, fields: Query<(), With<TextInput>>) {
+    if !matches!(input.input.logical_key, Key::Escape) || !input.input.state.is_pressed() { return; }
+    if fields.contains(input.original_event_target()) { return; } // this press blurred a field
+    // cancel / close / navigate back ...
+}
+```
+
+**`FocusCause` gained `Auto` (0.20)**, set when the `AutoFocus` component grants focus — add the arm to any exhaustive `match`, and note that a handler which special-cased `Navigated` no longer matches auto-focus.
 
 `EditableText` only accepts input while its entity is focused, via the `InputFocus` resource. **`InputFocus` fields are private in 0.19** — use `input_focus.get()`, `input_focus.set(entity, FocusCause::Navigated)`, `input_focus.clear()` (the `.0` field access is gone). The `TextEditChange` event fires on the entity *after* edits are applied; read the value with `editable.value()` (returns a string-like `SplitString`), reset with `editable.clear()`, cap length with `max_characters`, opt into select-all-on-focus with the `SelectAllOnFocus` component.
 
@@ -282,7 +358,7 @@ fn on_submit(
 }
 ```
 
-Use `EditableText` directly when you need full control over appearance (player-name fields, chat boxes, search bars). Use `FeathersTextInput` (below) when you want a polished, themed input out of the box.
+Use `TextInput` + `EditableText` directly when you need full control over appearance (player-name fields, chat boxes, search bars). Use `FeathersTextInput` (below) when you want a polished, themed input out of the box.
 
 ## Feathers
 
@@ -290,12 +366,14 @@ As of 0.19, Feathers is **no longer experimental**: the feature was renamed `exp
 
 Useful for tooling and inspectors. Uses for shipped games are limited — Feathers has an editor/utility aesthetic, not a general game UI aesthetic.
 
-0.19 grew the widget set considerably: `FeathersTextInput`, number input, dropdown menu + divider, disclosure toggle, icon/label primitives, pane/subpane/group decorators, and a Feathers-themed scrollbar and list view (the themed counterparts to the headless `Scrollbar`) — plus a `feathers_gallery` example. The widgets are now defined in **BSN** (`bsn!`): the new ones are BSN-only, and the older ones (button, checkbox, slider) gained `bsn!` definitions while their spawn functions were renamed (`button` → `button_bundle`) and deprecated. A Feathers checkbox in BSN, with its caption and change observer in one declaration:
+0.19 grew the widget set considerably: `FeathersTextInput`, number input, dropdown menu + divider, disclosure toggle, icon/label primitives, pane/subpane/group decorators, and a Feathers-themed scrollbar and list view (the themed counterparts to the headless `Scrollbar`) — plus a `feathers_gallery` example. **(0.20) Feathers is BSN-only**: the 0.19-deprecated `*_bundle` spawn fns and `ButtonBundleProps` are removed. Themed labels come from the new `bevy::feathers::display::caption("…")` scene fn (which emits `Text` + `ThemedText`) — write `@caption(..)` rather than spelling out `Text(..) ThemedText`. A Feathers checkbox in BSN, with its caption and change observer in one declaration:
 
 ```rust
+use bevy::feathers::{controls::FeathersCheckbox, display::caption};
+
 bsn! {
     @FeathersCheckbox {
-        @caption: { bsn! { Text("Enable shadows") ThemedText } }
+        @caption: bsn! { @caption("Enable shadows") }
     }
     MyCheckbox
     on(|change: On<ValueChange<bool>>, mut config: ResMut<ShadowConfig>| {
@@ -305,6 +383,18 @@ bsn! {
 ```
 
 See `references/bsn.md` for the BSN syntax these widgets use.
+
+**0.20 additions.** `FeathersSelect` — a dropdown whose `@options` prop takes a `Box<dyn SceneList>` of `@FeathersListRow` scenes (`list_rows_from_strings(["One", "Two"], Some(0))` builds them and tags each with `OptionIndex`), capped by `@max_visible` (default 8); it emits `ValueChange<Entity>` with the row entity. `FeathersLazyMenu { popup: Arc<dyn Fn() -> Box<dyn Scene> + Send + Sync> }` spawns its popup scene on open and despawns it on close, with `FeathersMenuToolButton` as the trigger. `FeathersColorInput` (swatch button that opens a picker), `FeathersColorSwatchGrid` (emits `ValueChange<Color>`), `FeathersColorWheel`. Dialogs: `FeathersDialog` (modal; its root node *is* the barrier, and you attach the despawn observer) and `FeathersFloatingDialog` (movable, self-despawns on `RequestClose`), composed from `@FeathersDialogHeader` / `@FeathersDialogClose` / `@FeathersDialogBody` / `@FeathersDialogFooter`.
+
+**Number input (0.20).** The value is a component you insert, not an event: `commands.entity(e).insert(NumberInputValue::F32(v))` — `UpdateNumberInput` is gone. `NumberInputValue` (`F32`/`F64`/`I32`/`I64`) is `#[require]`d by `FeathersNumberInput`, so it can also be given inline in `bsn!`. Tune with optional components: `SoftLimit(NumberInputRange::F32(0.0..=10.0))` (draws a slider bar and bounds dragging), `HardLimit(..)` (clamps), `NumberInputPrecision(2)`, `NumberInputStep(1.0)` (the release note calls it `Step`), `NumberInputWrap::Wrap`, `NumberInputUnits`. It emits a plain `ValueChange<f32>`/`<f64>`/`<i32>`/`<i64>` matching the `NumberInputValue` variant, not `ValueChange<NumberInputValue>`; re-insert `NumberInputValue` on `change.event_target()` to move the display.
+
+```rust
+// bsn!: @FeathersNumberInput NumberInputValue::F32(1.0) SoftLimit(NumberInputRange::F32(0.0..=10.0)) NumberInputStep(1.0)
+```
+
+**Contextual theming (0.20).** `ThemeProps` is no longer a flat token → color map but `{ token_assignments, semantic_base, semantic_overrides }`, so the same widget can render differently on a window, a floating panel or a popup. `UiTheme(create_dark_theme())` still just works; a custom theme built from the old flat map ports with `ThemeProps::new_non_contextual(map)`. Context comes from a `ThemeContext(SurfaceLevel)` component on the themed entity (absent means `SurfaceLevel::Base`), and **it does not propagate on its own**, whatever its doc comment says — to theme a subtree, put `Propagate::<ThemeContext>(ThemeContext(SurfaceLevel::Floating))` on the container (`FeathersCorePlugin` registers `HierarchyPropagatePlugin::<ThemeContext>` for you).
+
+**Cursor types moved (0.20).** `EntityCursor`, `DefaultCursor`, `OverrideCursor` and `CursorIconPlugin` moved from `bevy::feathers::cursor` to `bevy::picking::cursor`, so per-entity hover cursors no longer need Feathers — but `CursorIconPlugin` is not in `DefaultPickingPlugins`, so add it yourself.
 
 ## Auto directional navigation (0.18)
 
@@ -356,7 +446,7 @@ commands.spawn((
     Text::new(""),
     children![
         TextSpan::new("Click "),
-        (TextSpan::new("here"), observe(|_: On<Pointer<Click>>| {
+        (TextSpan::new("here"), observe(|_: On<PointerClick>| {
             info!("Hyperlink clicked!");
         })),
         TextSpan::new(" to continue"),
