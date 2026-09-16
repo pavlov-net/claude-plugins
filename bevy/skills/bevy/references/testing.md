@@ -6,6 +6,8 @@
 - `World::run_system_once` — test individual systems in isolation
 - `Schedule` for system ordering — multi-system interaction tests
 - `App::update()` for plugin tests — closest to "running the game"
+- Shuffling the schedule — `shuffle_seed` (0.20)
+- Panics in tests — panics become routed errors (0.20)
 - Mocking input — write input messages directly; prefer action-layer tests
 - Headless setup — feature flag for `DefaultPlugins`-disabled CI
 - Visual regression tests — when to invest, when to skip
@@ -94,7 +96,7 @@ Useful `World` methods:
 - `world.spawn(bundle).id()` — spawn and get the entity ID.
 - `world.get::<T>(entity)` / `world.get_mut::<T>(entity)` — read/write a component.
 - `world.resource::<T>()` / `world.resource_mut::<T>()` — read/write a resource.
-- `world.query::<&T>()` — get a query (then `.iter(&world)` or `.single(&world)`).
+- `world.query::<&T>()` — get a query (then `.iter(&world)`, or `.single(&world)?` / `.single(&world).unwrap()`, which returns a `Result`).
 - `world.write_message(msg)` — write a message.
 - `world.trigger(event)` — trigger an observer event.
 - `world.contains_resource::<T>()` — check for a resource without panicking.
@@ -106,6 +108,8 @@ Direct world tests work well for testing helper functions that take `&mut World`
 Run a system once against a constructed world:
 
 ```rust
+use bevy::ecs::system::RunSystemOnce;   // the method lives on an extension trait
+
 fn apply_poison(
     mut query: Query<&mut Health, With<Poisoned>>,
     strength: Res<PoisonStrength>,
@@ -158,7 +162,7 @@ fn poison_runs_before_regen() {
     schedule.add_systems((apply_poison, regenerate).chain());
     schedule.run(&mut world);
 
-    let h = world.query::<&Health>().single(&world);
+    let h = world.query::<&Health>().single(&world).unwrap();
     // poison: 100 - 5 = 95, then regen: 95 + 1 = 96
     assert_eq!(h.current, 96);
 }
@@ -189,7 +193,7 @@ fn combat_plugin_applies_poison() {
 }
 ```
 
-`app.update()` runs one full frame: `Startup` (on first call), then `PreUpdate` → `StateTransition` → `FixedUpdate` → `Update` → `PostUpdate` → `Last`.
+`app.update()` runs one full frame: on the first call `PreStartup` → `Startup` → `PostStartup` (preceded by an initial `StateTransition`, which is why `OnEnter` for the initial state runs before `PreStartup`), then every frame `First` → `PreUpdate` → `StateTransition` → `RunFixedMainLoop` (which is where `FixedUpdate` runs, zero or more times) → `Update` → `PostUpdate` → `Last`.
 
 `MinimalPlugins` is the lightweight default — schedules, time, but no rendering or windowing. Use it for headless tests. Add your specific plugins on top.
 
@@ -221,6 +225,27 @@ fn poisoned_creature_eventually_dies() {
 
 Without the cap, a bug turns the test into an infinite loop. Pick a cap with margin over the expected case but not so large that hangs waste minutes of your time.
 
+## Shuffling the schedule (0.20)
+
+Two conflicting systems with no explicit ordering run in an arbitrary-but-stable order, so a suite can pass for years on an accident. With the `debug` feature, `ScheduleBuildSettings::shuffle_seed` randomizes that choice while honouring every real constraint:
+
+```rust
+use bevy::ecs::schedule::ScheduleBuildSettings;   // not in the prelude
+
+app.edit_schedule(Update, |schedule| {
+    schedule.set_build_settings(ScheduleBuildSettings {
+        shuffle_seed: Some(seed),
+        ..default()
+    });
+});
+```
+
+Run the integration tests across a handful of seeds and log the seed so a failure reproduces. Prefer the single-threaded executor while doing this — the multi-threaded executor is greedy and won't follow the shuffled order exactly. See `references/scheduling.md`.
+
+## Panics in tests (0.20)
+
+0.20 converts panics inside systems, run conditions and commands into errors routed through the error handler. The default handler re-panics, so `#[should_panic]` tests still behave as before — but if a test app installs a non-panicking handler, a panicking system is merely *logged* and the test passes. Assert on state, not on the absence of a panic.
+
 ## Mocking input
 
 Bevy's input runs through messages. To simulate an input, write the message:
@@ -245,7 +270,7 @@ fn space_triggers_jump() {
 
     app.update();
 
-    let player = app.world().query_filtered::<&Velocity, With<Player>>().single(app.world());
+    let player = app.world_mut().query_filtered::<&Velocity, With<Player>>().single(app.world()).unwrap();
     assert!(player.0.y > 0.0);
 }
 ```
@@ -282,15 +307,18 @@ If you need a real GPU in CI:
 - Windows: WARP is built in (software DX12).
 - macOS: GitHub macOS runners actually have GPUs.
 
-Force a software backend with `WGPU_BACKEND=vulkan` or `WGPU_ADAPTER_NAME=llvmpipe`.
+Force a software adapter with `WGPU_FORCE_FALLBACK_ADAPTER=1`; `WGPU_ADAPTER_NAME=llvmpipe` picks one by name. (`WGPU_BACKEND` selects an API — Vulkan, DX12, Metal — not a software renderer.)
 
 For deterministic rendering in CI tests, lock the frame time and seeds:
 
 ```rust
-app.add_plugins(DefaultPlugins.set(TimePlugin {
-    /* fixed frame time */
-}));
+use bevy::time::TimeUpdateStrategy;   // not in the prelude
+use std::time::Duration;
+
+app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
 ```
+
+`TimeUpdateStrategy` is the knob: `ManualDuration` advances the clock by a fixed step on every `update()`, `ManualInstant` sets it outright. `TimePlugin` has no frame-time field. For fixed-timestep systems, set the step with `Time<Fixed>::from_hz(..)`.
 
 Use `bevy_ci_testing` (with the `bevy_ci_testing` feature) for scripted test runs that capture screenshots at specific frames and exit cleanly.
 

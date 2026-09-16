@@ -1,20 +1,21 @@
 # Common pitfalls (and what to do instead)
 
 ## Contents
-- Communication — polling for spawn-time setup; Event/Message confusion; `trigger_targets` removal; `Trigger<E>` rename; `Replace`→`Discard` (0.19)
+- Communication — polling for spawn-time setup; Event/Message confusion; `trigger_targets` removal; `Trigger<E>` rename; `Replace`→`Discard` (0.19); `On<Add<T>>` and flat pointer events (0.20)
 - Change detection — mutable deref always marks changed; `RemovedComponents` in `FixedUpdate`
+- Queries — `iter_many` yields `Result` (0.20)
 - Components and bundles — `Handle<T>` not a Component; bundle arity; `children!` macro limit; `clear_children` rename
 - Schedules and states — `set` re-fires `OnEnter`/`DespawnOnExit`; `add_event` vs `add_message`; manual `register_type`; system ordering source-of-truth
 - Resources and lifetimes — resources-as-components / no `Component+Resource` co-derive (0.19); broad-query conflicts; non-static lifetime forbidden; `AmbientLight` split
-- Rendering — `Camera::target` move; `Atmosphere` now an entity (0.19); light `shadow_maps_enabled` (0.19); `MaterialPlugin` field-to-method; auto-Aabb; mesh `try_*` methods
+- Rendering — `Camera::target` move; `Atmosphere` now an entity (0.19); light `shadow_maps_enabled` (0.19); `MaterialPlugin` field-to-method; auto-Aabb; mesh `try_*` methods; WESL shaders, transmission, tonemapping, sprite Z (0.20)
 - Color arithmetic — direct ops removed
 - Assets — handle drop = unload; `SceneRoot`→`WorldAssetRoot` (0.19); `get_mut`→`AssetMut` (0.19); asset path resolution; `LoadContext::asset_path` removal
-- UI — `Val::Px(...)` verbosity; `Transform` on UI nodes; text `FontSource`/`FontSize` (0.19); `InputFocus` fields private (0.19); widgets/Feathers de-experimentalized (0.19); non-text picking
+- UI — `Val::Px(...)` verbosity; `Transform` on UI nodes; text `FontSource`/`FontSize` (0.19); `InputFocus` fields private (0.19); widgets/Feathers de-experimentalized (0.19); `Button`/`Interaction` deprecation, the two-component text field, elliptical corners, `Val::Em` (0.20); non-text picking
 - Cargo features — additive surprise; collection migration; `audio`/`ui` no longer implied (0.19); picking-backend renames
-- Misc — `cargo clean` reflexes; same-system `next_state`/spawn ordering; reflection generics
+- Misc — `cargo clean` reflexes; same-system `next_state`/spawn ordering; reflection generics; `Name` `'static` bound, `&mut World` conflicts caught at schedule build (0.20)
 - Performance traps — per-frame allocation; asset content cloning; shipping `dynamic_linking`
 
-Patterns that look reasonable but bite later, or 0.16/0.17/0.18-era idioms that no longer work in 0.19. Each one has the symptom alongside the fix.
+Patterns that look reasonable but bite later, or 0.16–0.19-era idioms that no longer work in 0.20. Each one has the symptom alongside the fix.
 
 ## Communication
 
@@ -25,7 +26,7 @@ Patterns that look reasonable but bite later, or 0.16/0.17/0.18-era idioms that 
 **Fix**: Use an observer.
 
 ```rust
-commands.add_observer(|add: On<Add, NeedsHookup>, mut commands: Commands /* deps */| {
+commands.add_observer(|add: On<Add<NeedsHookup>>, mut commands: Commands /* deps */| {
     // Hookup work, with full system params.
     commands.entity(add.entity).remove::<NeedsHookup>();
 });
@@ -84,7 +85,23 @@ commands.trigger(Click { entity: target });
 
 **Cause**: 0.19 renamed the lifecycle event `Replace` → `Discard` (it fires when a component is removed *or* replaced by a new value).
 
-**Fix**: `On<Discard, T>`, `ComponentHooks::on_discard`, `#[component(on_discard = ...)]`. The `Replace`/`OnReplace` doc-aliases remain only for search.
+**Fix**: `On<Discard<T>>`, `ComponentHooks::on_discard`, `#[component(on_discard = ...)]`. The `Replace`/`OnReplace` doc-aliases remain only for search.
+
+### `On<Add, MyComponent>` no longer compiles (0.20)
+
+**Symptom**: `struct takes 1 generic argument but 2 were supplied` on an observer's first parameter.
+
+**Cause**: the `B: Bundle` parameter moved off `On<E, B>` and into the lifecycle events themselves.
+
+**Fix**: `On<Add<MyComponent>>`, `On<Insert<T>>`, `On<Discard<T>>`, `On<Remove<T>>`, `On<Despawn<T>>`. A dynamic-component observer built with `Observer::new(..).with_component(id)` takes `On<Add<()>>`. A tuple still means OR: `On<Add<(A, B)>>`. See `references/communication.md`.
+
+### `On<Pointer<Press>>` / `press.pointer_id` (0.20)
+
+**Symptom**: `cannot find type Pointer in this scope` with a type argument, or `no field pointer_id` / `no field pointer_location`.
+
+**Cause**: pointer events were flattened. `Pointer<Press>` is now `PointerPress`, and `Pointer` is a non-generic struct stored as a *field* on each event rather than a wrapper around it.
+
+**Fix**: `On<PointerPress>`, then read `ev.pointer.id` and `ev.pointer.position`. Same for `PointerClick`, `PointerOver`, `PointerOut`, `PointerDrag`, `PointerScroll`, … Code generic over pointer events bounds on the new `PointerEvent` trait: `fn f<E: PointerEvent>(e: On<E>)`.
 
 ## Change detection
 
@@ -124,7 +141,17 @@ For resources, `ResMut::set_if_neq(...)` works the same way.
 
 **Cause**: `RemovedComponents` is cleared between `World` updates; in `FixedUpdate`, multiple updates can happen between reads and clears.
 
-**Fix**: Use an `On<Remove, T>` observer or a `#[component(on_remove = ...)]` hook instead. These also give you access to the component's *value* before it's removed, which `RemovedComponents` doesn't.
+**Fix**: Use an `On<Remove<T>>` observer or a `#[component(on_remove = ...)]` hook instead. These also give you access to the component's *value* before it's removed, which `RemovedComponents` doesn't.
+
+## Queries
+
+### `for x in q.iter_many(ids)` stops compiling (0.20)
+
+**Symptom**: ``expected `&MyComponent`, found `Result<&MyComponent, QueryEntityError>` `` in the loop body.
+
+**Cause**: `iter_many`, `iter_many_mut`, the `iter_many_unique*` and `par_iter_many*` families now yield a `Result` per element, so ids that don't match the query — or name despawned entities — are visible instead of silently skipped.
+
+**Fix**: append `.matched()` for the old skip-on-miss behaviour, or handle the `Err`. `.unwrapped()` panics on a miss. `QuerySortedManyIter` (from `.sort::<..>()`) has no `.matched()` — use `.flat_map(Result::ok)`. For `par_iter_many(..).for_each(..)`, start the closure with `let Ok(item) = item else { return };`.
 
 ## Components and bundles
 
@@ -214,7 +241,7 @@ Children::spawn(SpawnIter(items.into_iter().map(|item| /* spawn fn */)))
 
 **Cause**: 0.18 always re-fires `OnEnter`/`OnExit` on `set`, even when the state was already `X`.
 
-**Fix**: `next_state.set_if_neq(X)` for the old "skip if equal" behavior.
+**Fix**: `next_state.set_if_different(X)` for the old "skip if equal" behavior. 0.20 renamed it with **no deprecated shim** — `NextState::set_if_neq` is a hard compile error. The unrelated `Mut::set_if_neq` / `ResMut::set_if_neq` on components and resources keeps its name.
 
 This is sometimes intentional — you might want to re-fire setup on every state-change attempt. Just be explicit about which behavior you want.
 
@@ -371,6 +398,46 @@ mesh.try_insert_attribute(Mesh::ATTRIBUTE_POSITION, positions)?;
 
 Or set `RenderAssetUsages::all()` (default) when creating the mesh to keep CPU data alongside the GPU upload.
 
+### A custom shader stops compiling on `#import` / `#ifdef` (0.20)
+
+**Symptom**: shader compilation errors pointing at `#import`, `#ifdef`, or `#{SOMETHING}`.
+
+**Cause**: naga_oil is gone; Bevy's shading language is WESL.
+
+**Fix**: rename `.wgsl` → `.wesl` (and the Rust-side path string) and translate `#import` → `import a::b::C;`, `#ifdef` → `@if(FLAG)`, `#{NAME}` → `constants::NAME`. Plain WGSL with no directives keeps working, but can't import and ignores shader defs. GLSL is gone, as are the `shader_format_wesl` / `shader_format_glsl` features. Full example in `references/rendering.md`.
+
+### Transmissive materials look wrong after upgrading (0.20)
+
+**Symptom**: glass, water and other transmissive `StandardMaterial`s stop refracting.
+
+**Cause**: `ScreenSpaceTransmission` is no longer registered as a required component of `Camera3d`.
+
+**Fix**: add `ScreenSpaceTransmission` to the camera to opt back in. Without it those materials fall back to their `alpha_mode` routing rather than going black.
+
+### `Tonemapping::None` loses dithering (0.20)
+
+**Symptom**: banding in gradients on a 3D camera that used `Tonemapping::None`.
+
+**Cause**: `None` is a full passthrough now — `ColorGrading` and `DebandDither` don't apply and negative channels aren't clamped. `Camera3d` enables `DebandDither` by default, so the banding it was hiding comes back.
+
+**Fix**: use `Tonemapping::Linear` — no tone curve, but grading, dithering and clamping still apply. Bevy logs a warning for `None` + `DebandDither::Enabled`. `Camera2d` already defaults to `Linear`.
+
+### Sprites at the same Z swap order (0.20)
+
+**Symptom**: overlapping sprites that used to draw in a stable order flicker or swap.
+
+**Cause**: the sprite backend now runs through `Mesh2d` / `Material2d`. Same-Z ordering was never part of the contract and the new backend resolves it differently. Watch out too for `Query<&Mesh2d>`-style queries, which now match sprites.
+
+**Fix**: give an explicit Z to anything that can overlap. While you're there, `Sprite::alpha_mode` lets you pick `Opaque` or `Mask(f32)` where `Blend` isn't needed.
+
+### A render system stops seeing fresh data (0.20)
+
+**Symptom**: a custom system in `RenderSystems::Prepare` (or a `Core3dSystems` / `UiSystems` set) observes stale state.
+
+**Cause**: 0.20 switched those built-in set orderings from `chain()` to `chain_weak()` — systems are ordered only where their *tracked* ECS accesses conflict.
+
+**Fix**: state the dependency explicitly with `.after(..)`, or express it through the ECS (producer writes `ResMut<T>`, consumer reads `Res<T>`) so the scheduler can see it. See `references/scheduling.md` for what counts as tracked access.
+
 ## Color arithmetic
 
 ### `let dim = color * 0.5;` doesn't compile
@@ -482,7 +549,7 @@ Node {
 
 **Cause**: 0.19 migrated text to `parley`; `font` is now `FontSource` and `font_size` is `FontSize`.
 
-**Fix**: `font: handle.into()` (or `FontSource::Family("…")` / `FontSource::Monospace`), `font_size: FontSize::Px(24.0)`. New `weight`/`width`/`style` fields cover variable fonts; `LetterSpacing` is its own component. `TextLayout::new_with_justify` → `TextLayout::justify`.
+**Fix**: `font: handle.into()` (or `FontSource::family("…")` / `FontSource::monospace()`), `font_size: FontSize::Px(24.0)`. New `weight`/`width`/`style` fields cover variable fonts; `LetterSpacing` is its own component. `TextLayout::new_with_justify` → `TextLayout::justify`.
 
 ### `input_focus.0 = Some(entity)` doesn't compile (0.19)
 
@@ -490,7 +557,7 @@ Node {
 
 **Cause**: 0.19 made `InputFocus` fields private and added a `FocusCause`.
 
-**Fix**: `input_focus.set(entity, FocusCause::Navigated)`, `input_focus.get()`, `input_focus.clear()`. (Core `InputFocus` setup also moved from `InputDispatchPlugin` to `InputFocusPlugin`, both in `DefaultPlugins`.)
+**Fix**: `input_focus.set(entity, FocusCause::Navigated)`, `input_focus.get()`, `input_focus.clear()`. (Core `InputFocus` setup also moved from `InputDispatchPlugin` to `InputFocusPlugin`, both in `DefaultPlugins`.) 0.20 adds a `FocusCause::Auto` variant — an exhaustive `match` on `FocusCause` needs another arm.
 
 ### `experimental_bevy_ui_widgets` / `experimental_bevy_feathers` feature not found (0.19)
 
@@ -508,6 +575,38 @@ Node {
 
 **Fix**: Wrap the `Text` in a parent `Node`, put the picking observer on the parent.
 
+### `Button` resolves to the deprecated one (0.20)
+
+**Symptom**: `use of deprecated struct bevy::ui::Button`, or a `Button` that never activates.
+
+**Cause**: `bevy::ui::Button` and `bevy::ui::Interaction` are deprecated in favour of `bevy::ui_widgets::Button` with the `Hovered` / `Pressed` components — but `bevy::ui::prelude` still exports the deprecated `Button`, so a plain `use bevy::prelude::*;` picks the wrong one. `bevy_ui_widgets` has no prelude, so nothing pulls the new `Button` in for you.
+
+**Fix**: `use bevy::ui_widgets::Button;` explicitly — an explicit import shadows the prelude glob. Replace `Query<&Interaction, Changed<Interaction>>` with `Query<(&Hovered, Has<Pressed>), Or<(Changed<Hovered>, Added<Pressed>)>>`. `ui_widgets::Button` only requires `AccessibilityNode`, so insert `Node` and `Hovered::default()` yourself.
+
+### A text field renders but ignores typing (0.20)
+
+**Symptom**: the field shows text and draws a cursor; keystrokes do nothing.
+
+**Cause**: `EditableText` was split in 0.20. It now holds only the editing state; the observers and key bindings live in `TextInput` (`bevy::ui_widgets`).
+
+**Fix**: insert `TextInput` — it `#[require]`s `EditableText`, so `TextInput` alone is enough. Read-only is a *third component*, `TextReadWriteMode::ReadOnly` (or `Static` to disable selection too), not a field on `TextInput`.
+
+### `BorderRadius { top_left: px(10.), .. }` doesn't compile (0.20)
+
+**Symptom**: ``expected `CornerRadius`, found `Val` ``.
+
+**Cause**: corners are elliptical now — each is a `CornerRadius { x, y }`.
+
+**Fix**: `px(10.).into()`, or `CornerRadius::circular(px(10.))` to be explicit. `BorderRadius::top_right(vh(10.))` still works but is no longer `const`; `BorderRadius::resolve_single_corner` became `CornerRadius::resolve`.
+
+### `Val::Em` doesn't inherit down the tree (0.20)
+
+**Symptom**: `em(1.5)` on a child resolves against 20px rather than the parent's font size.
+
+**Cause**: `Val::Em` resolves against the node's own `EmSize` component, and Bevy recomputes `EmSize` only for nodes that carry a `TextFont`. Everything else keeps whatever you set, defaulting to `DEFAULT_REM_SIZE_PX`. Propagation is the app's job.
+
+**Fix**: use `rem(..)` (resolved against the global `RemSize` resource) for layout, and keep `em(..)` for nodes that actually have a `TextFont`.
+
 ## Cargo features
 
 ### Mysterious feature appears enabled despite not being in your `Cargo.toml`
@@ -523,7 +622,7 @@ Node {
 Not a bug, but maintenance burden. Feature collections (`3d`, `ui`, etc.) cover most use cases. Switch to:
 
 ```toml
-bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
+bevy = { version = "0.20", default-features = false, features = ["3d", "ui"] }
 ```
 
 Add specific features only when the collection is missing something. The collections are designed to be the right size for typical apps.
@@ -575,7 +674,7 @@ If you genuinely need to nuke caches, target a specific package: `cargo clean -p
 
 **Cause**: Commands flush at the end of the schedule (or at explicit sync points), not at the end of the system.
 
-**Fix**: Capture the entity ID and act on it later (next system, or in the response observer triggered by `On<Add, T>`). For "spawn and immediately use," use `world.spawn(...)` directly via `&mut World` or a `Commands::queue` closure — but those only work in exclusive systems.
+**Fix**: Capture the entity ID and act on it later (next system, or in the response observer triggered by `On<Add<T>>`). For "spawn and immediately use," use `world.spawn(...)` directly via `&mut World` or a `Commands::queue` closure — but those only work in exclusive systems.
 
 ### Forgotten `register_type::<MyEnum>()` for variants
 
@@ -596,6 +695,22 @@ Without this, the specific monomorphized type isn't visible to reflection.
 **Cause**: 0.19 merged param validation into fetching — `validate_param` was removed and `get_param` now returns `Result<Self::Item, SystemParamValidationError>`.
 
 **Fix**: Delete `validate_param`; move its logic into `get_param`, returning `Err(SystemParamValidationError::skipped::<Self>("…"))` to skip or `::invalid::<Self>("…")` to error. Wrap the success case in `Ok(...)`. `SystemState::get`/`get_mut` now return `Result` — add `.unwrap()` or handle it.
+
+### `Name::from(runtime_str)` stops compiling (0.20)
+
+**Symptom**: a lifetime error on a runtime `&str` — `borrowed value does not live long enough`, or "argument requires that … is borrowed for `'static`".
+
+**Cause**: `Name`'s `From<&str>` impl was narrowed to `From<&'static str>` to avoid a hidden allocation.
+
+**Fix**: `Name::new(runtime_str.to_owned())`. String literals — `Name::from("Player")` — are unaffected.
+
+### `error[B0002]` at schedule build on a `&mut World` system (0.20)
+
+**Symptom**: a system taking `&mut World` alongside `Commands`, `Query`, `Res` or `WorldId` used to fail to compile; now it builds and panics at schedule build with `error[B0002]: … conflicts with a previous system parameter`.
+
+**Cause**: 0.20 unified exclusive and regular function systems. `&mut World` is an ordinary `SystemParam`, so the conflict is caught at runtime instead of compile time.
+
+**Fix**: drop the conflicting param — for the world id, call `world.id()` or take `Local<WorldId>`. `ExclusiveSystemParam`, `ExclusiveFunctionSystem` and `ExclusiveMarker` are gone, and `System::is_exclusive()` became `SystemAccess::is_exclusive()`. `&mut World` still blocks all parallelism for that system, so don't reach for it casually. See `references/ecs.md`.
 
 ## Performance traps
 

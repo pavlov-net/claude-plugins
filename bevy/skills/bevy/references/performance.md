@@ -1,7 +1,7 @@
 # Performance and profiling
 
 ## Contents
-- Cheap optimizations — change detection, query filters, run conditions, parallel iteration, contiguous/SIMD iteration (0.19)
+- Cheap optimizations — change detection, query filters, entity-list iteration, run conditions, parallel iteration, contiguous/SIMD iteration (0.19; parallel 0.20)
 - Fixed timestep — for physics, networking, deterministic simulation
 - Profiling tools — Tracy, Chrome tracing, perf flame graphs, GPU vendor tools
 - Compile profiles — `release`, `dev` with package-level `opt-level = 3`
@@ -32,6 +32,8 @@ Two notes:
 - Performance-wise, query filters and `Ref<T>::is_changed()` are equivalent — the query iterator skips non-matching entities, but they're still fetched. The win is in the body, not the iteration.
 - Mutable deref unconditionally marks changed. If your write often produces the same value, use `set_if_neq` or guard the write — otherwise downstream gates on `Changed<T>` fire constantly.
 
+`#[component(summary_tick)]` (0.20) has a table-storage component track one summary tick per column, so contiguous iteration can skip a whole table slice: `ContiguousRef::split` reports `summary_tick_is_changed() == Some(false)` when nothing in that table changed. Ordinary `Changed<T>` filters don't use it and writes get slightly slower — add it only where reads dominate.
+
 ### Filter at the query, not in the loop
 
 ```rust
@@ -46,6 +48,10 @@ for (health, armor) in query.iter() { /* ... */ }
 ```
 
 `With<T>` and `Without<T>` are essentially free — they're archetype-level filters. Use them aggressively to narrow the query rather than checking inside the loop.
+
+### Iterating an entity list
+
+`iter_many(ids)` is the right tool for "walk this ordered list of entities" and is cheaper than `ids.iter().filter_map(|e| q.get(*e).ok())`. Since 0.20 each item is a `Result`; `.matched()` restores the old skip-on-miss behaviour with no extra cost, and `.unwrapped()` panics on a miss. `par_iter_many` / `par_iter_many_unique` parallelize it — the closure argument is a `Result` there too.
 
 ### Run conditions
 
@@ -90,7 +96,7 @@ fn process(
 
 `command_scope` gives each parallel iteration its own `Commands` instance.
 
-### Contiguous iteration / SIMD (0.19)
+### Contiguous iteration / SIMD (0.19; parallel 0.20)
 
 Table-stored components are already laid out flat in memory, but the normal `Query` iterator hands you one row at a time, so the compiler can't see the contiguous array. `contiguous_iter` / `contiguous_iter_mut` (0.19) hand you the whole table column slice at once, which lets LLVM auto-vectorize — or you reach for explicit SIMD:
 
@@ -107,6 +113,8 @@ fn integrate(mut query: Query<(&mut Position, &Velocity)>) {
 ```
 
 They return `Result` — `Ok` only when the query is **dense**: all fetched components use table storage, and no per-row filters (`Changed`/`Added`) are present (archetypal filters like `With`/`Without` are fine). Because those are fixed properties of the query type, `.unwrap()` is safe in non-generic code. `ContiguousMut::bypass_change_detection()` gives the raw `&mut [T]` for the last bit of speed when you don't need change ticks. Worth it on CPU-bound bulk numeric work (physics, particles, large simulations); not worth the bother on small or sparsely-touched queries.
+
+0.20 adds the parallel forms, `contiguous_par_iter()` / `contiguous_par_iter_mut()` (plus the `QueryState` world-level versions), which hand each worker whole table slices — the combination you want for large, uniform, numeric work. They return `Result<QueryContiguousParIter, QueryNotDenseError>` with the same density rules, are driven with `.for_each(|(mut pos, vel)| { … })`, and take `.batching_strategy(..)` like `par_iter`.
 
 ## Fixed timestep
 
@@ -365,18 +373,26 @@ cargo llvm-lines --release
 In 0.18, top-level collections replaced hand-listing dozens of features:
 
 ```toml
-bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
+bevy = { version = "0.20", default-features = false, features = ["3d", "ui"] }
 ```
 
 Available collections: `2d`, `3d`, `ui`, `audio`, `dev`. Mid-level: `2d_api`, `3d_api`, `default_app`, `default_platform`.
 
-`dev` should not be enabled in release builds — it pulls in `bevy_dev_tools`, fast-compile features, etc.
+`dev` should not be enabled in release builds — it is `debug` (ECS name debugging) + `bevy_dev_tools` + `render_dev_tools` + `file_watcher`. It does not include dynamic linking or other fast-compile switches; those are separate (see *Dynamic linking* below).
 
 0.19 untangled a few of these so you can swap subsystems without a feature soup:
 
 - **`audio` is no longer implied by the `2d`/`3d`/`ui` collections** — it's now its own default feature, so full default builds are unchanged. If you build with `default-features = false` and want audio, add `"audio"` explicitly. The upside: dropping `bevy_audio` (e.g. to use `bevy_seedling`) is now just "disable defaults, list `["3d", "ui"]`" instead of re-listing everything-except-audio. (`ui` remains a top-level default collection alongside `2d`/`3d` — it was *not* decoupled.)
 - **`bevy_window`, `bevy_input_focus`, and `custom_cursor` left `default_app`** (they're in `common_api`/`ui_api`/`default_platform` now). Headless tools and servers that depend on `default_app` compile fewer deps; re-add those three if you relied on them.
 - **Android activity backends** (`android-game-activity`, `android-native-activity`) are no longer default — pick one explicitly.
+
+0.20 changes a few more:
+
+- **`shader_format_wesl` and `shader_format_glsl` are gone.** WESL is always available; GLSL support was removed. The SPIR-V features are unchanged.
+- **`render_dev_tools`** is new and gates the render-side dev tools (overlays, screenshot helpers, the debug grid). `bevy_dev_tools` on its own is render-free; `dev` turns both on.
+- **`compressed_image_saver`** changed meaning; `compressed_image_saver_universal` keeps the old Basis Universal behaviour. See `references/assets.md`.
+- **`bevy_curve`** is a new crate/feature (in `common_api`): `bevy_math::curve::*` moved to `bevy::curve::*`, prelude unchanged.
+- **`pan_orbit_camera`** and **`complex_script_segmentation`** are new opt-ins (the latter adds CJK/Thai/Khmer/Lao/Myanmar line-breaking dictionaries and a noticeably larger binary).
 
 ### Removing unused features
 

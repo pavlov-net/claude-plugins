@@ -4,12 +4,12 @@
 - Entities — opaque IDs, spawn/despawn semantics
 - Components — flavors (marker, newtype, named, enum), design rules
 - Required components — `#[require(...)]`, replaces bundles for "always together" composition
-- Queries — read/mut, multi-component, filters, optional, single-entity, multi-entity
+- Queries — read/mut, multi-component, filters, optional, single-entity, multi-entity, `iter_many` (0.20 yields `Result`)
 - Change detection — `Changed<T>`, `Added<T>`, `Spawned`, `Ref<T>`, `set_if_neq`
 - Resources — `Res`/`ResMut`, init patterns, optional, resources-as-components (0.19), vs singleton entities
 - Local — per-system state
 - Relationships — `ChildOf`/`Children`, custom relationships, naming convention
-- Custom QueryData and SystemParam — derive macros for repeated patterns
+- Custom QueryData and SystemParam — derive macros for repeated patterns; `&mut World` as a plain param (0.20)
 - Disabling entities — `Disabled` component, default query filters
 
 The mental model: Bevy's world is a sparse database. Entities are row IDs. Components are columns. Archetypes are tables — Bevy automatically groups entities with the same set of components into the same archetype, packing components into dense arrays for cache-friendly iteration.
@@ -29,6 +29,8 @@ commands.entity(e).despawn();
 ```
 
 Spawn and despawn are deferred — they happen when the command queue flushes (end of the schedule, or at an explicit sync point inserted by the scheduler). Within a single system, you cannot spawn an entity and then immediately query for it.
+
+**Bulk despawn (0.20):** `commands.despawn_all::<With<Bullet>>()` despawns every entity matching a query filter; `commands.despawn_all_where::<&Health, ()>(|h| h.0 <= 0.0)` adds a per-entity predicate over query data (the `Commands` closure must be `Send + 'static`; the `World` variants needn't be). One filtered query inside one command, so it beats queueing a command per entity — but the filter runs at command flush, not when your system does. Default query filters apply, so `Disabled` entities are skipped unless the filter includes `Allow<Disabled>`.
 
 ## Components
 
@@ -174,9 +176,21 @@ fn gravity(mut q: Query<&mut Transform, With<HasMass>>) {
 }
 ```
 
+**`iter_many` yields `Result` (0.20).** `q.iter_many(entities)`, `iter_many_mut`, `iter_many_unique[_mut]`, their `.sort*()` variants, and `par_iter_many`/`par_iter_many_unique[_mut]` now hand you `Result<Item, QueryEntityError>` per entity instead of silently dropping entities that are despawned or don't match. Pick the policy explicitly:
+
+```rust
+for h in q.iter_many(list).matched() { /* skip misses — the 0.19 behaviour */ }
+for r in q.iter_many(list) { let h = r?; /* propagate in a Result system */ }
+
+let mut it = q.iter_many_mut(&children).matched();
+while let Some(mut h) = it.fetch_next() { /* ... */ }
+```
+
+`.unwrapped()` panics on a bad entity. Sorted many-iters have neither adapter — use `.sort::<&T>().flat_map(Result::ok)`. In `par_iter_many` closures: `let Ok(c) = c else { return };`. `iter_descendants`/`iter_ancestors` still yield plain `Entity` and are unaffected.
+
 In 0.18, you can also access multiple distinct components on a single entity safely with `entity.get_components_mut::<(&mut A, &mut B)>()`.
 
-For CPU-heavy bulk updates over many entities, 0.19 adds **contiguous iteration** — `query.contiguous_iter()` / `contiguous_iter_mut()` hand you whole table column slices so LLVM can auto-vectorize (SIMD). They return `Err(QueryNotDenseError)` when the query isn't dense (sparse-set components, or `Changed`/`Added` filters break contiguity). See `references/performance.md`.
+For CPU-heavy bulk updates over many entities, 0.19 adds **contiguous iteration** — `query.contiguous_iter()` / `contiguous_iter_mut()` hand you whole table column slices so LLVM can auto-vectorize (SIMD). They return `Err(QueryNotDenseError)` when the query isn't dense (a sparse-set component in the query). `Changed`/`Added`/`Spawned` filters are rejected at *compile* time by the `F: ArchetypeFilter` bound — only `With`/`Without`/`Or`/tuples qualify. 0.20 adds the parallel forms `contiguous_par_iter()` / `contiguous_par_iter_mut()`. See `references/performance.md`.
 
 0.19 also generalized queries to support reading from **multiple entities per item** (e.g. a component on the entity's parent). The fallout for *generic* code: iteration methods (`into_iter`, `single_mut`, `iter_combinations_mut`, …) now need a `D: IterQueryData` bound, and `transmute`/`join`/`sort` need `SingleEntityQueryData`. Concrete query types satisfy these automatically; only generic functions over `D: QueryData` need to add the bound (or iterate non-iterable data with `iter_mut().fetch_next()`).
 
@@ -236,7 +250,7 @@ fn handle_removed(mut removed: RemovedComponents<Health>) {
 }
 ```
 
-But `RemovedComponents` can miss removals when used in `FixedUpdate`. Prefer an `On<Remove, T>` observer or a `#[component(on_remove = ...)]` hook for reliable removal handling — those also give you access to the *value* before it's gone, which `RemovedComponents` cannot.
+But `RemovedComponents` can miss removals when used in `FixedUpdate`. Prefer an `On<Remove<T>>` observer (0.20; `On<Remove, T>` in 0.19) or a `#[component(on_remove = ...)]` hook for reliable removal handling — those also give you access to the *value* before it's gone, which `RemovedComponents` cannot.
 
 ## Resources
 
@@ -307,11 +321,11 @@ In 0.19 `Resource` became a subtrait of `Component`, and resources are stored as
 
 - **Reflection uses `ReflectComponent`.** `#[reflect(Resource)]` is now a marker only; `ReflectComponent` carries the real machinery. Code that drives resources through reflection (BRP, `bevy_world_serialization`) should reach for `ReflectComponent`. You no longer need `#[derive(MapEntities)]` on a resource — components map entities by default, so `#[derive(Resource)] struct Foo(#[entities] Entity)` is enough.
 
-- **Resources can have hooks, observers, and relationships.** The capabilities that used to be component-only now work on resources: `#[component(on_add = ...)]` on a resource type, `world.add_observer(|_: On<Add, MyResource>, ...|)`, immutability via `#[component(immutable)]`, even relationships pointing at the resource's entity (`world.resource_entity::<R>()` gets it). This narrows the old "resource vs singleton entity" gap considerably.
+- **Resources can have hooks, observers, and relationships.** The capabilities that used to be component-only now work on resources: `#[component(on_add = ...)]` on a resource type, `world.add_observer(|_: On<Add<MyResource>>, ...|)`, immutability via `#[component(immutable)]`, even relationships pointing at the resource's entity (`world.resource_entity::<R>()` gets it). This narrows the old "resource vs singleton entity" gap considerably.
 
 - **Broad queries now see resources.** Queries that match *all* entities — `Query<Entity>`, `Query<EntityMut>`, `Query<EntityRef>`, `Query<Option<&T>>` — now also match resource entities, which can conflict with `Res`/`ResMut` in the same system. Exclude resource entities with `Without<IsResource>` (the `IsResource` marker is on every resource entity) or `Without<MySpecificResource>`. The same applies to non-send data and `NonSend<T>`.
 
-- **Non-send "resources" are now non-send "data."** Since `Send` resources are components, the `!Send` variants split off: `init_non_send`/`insert_non_send` (the `*_non_send_resource` forms are deprecated), `World::non_send`/`non_send_mut`, etc.
+- **Non-send "resources" are now non-send "data."** Since `Send` resources are components, the `!Send` variants split off: `init_non_send`/`insert_non_send`, `World::non_send`/`non_send_mut`, etc. The `*_non_send_resource` forms were deprecated in 0.19 and **removed in 0.20** (compile error, not a warning).
 
 - **Immutable resources affect generic bounds.** `ResMut<R>`, `World::resource_mut::<R>`, and friends now require `R: Resource<Mutability = Mutable>`. Generic code over an arbitrary `R: Resource` that needs `ResMut` must add the bound:
 
@@ -325,7 +339,7 @@ Resource when the data is truly singular and won't be queried as part of a large
 
 - The data might one day grow to a small collection (one player → split-screen, one camera → multi-camera).
 - It needs to be rendered/simulated alongside other entities (player avatar — needs `Transform`, `Visibility`, `Mesh3d` etc.).
-- It needs lifecycle hooks (`On<Add, ...>` etc., which are entity-scoped).
+- It needs lifecycle hooks (`On<Add<T>>` etc., which are entity-scoped).
 
 When in doubt, use a singleton entity — it's easier to scale up to a collection later than to scale a resource down.
 
@@ -460,6 +474,21 @@ fn combat_tick(mut combat: Combat) {
 ```
 
 Composability: `SystemParam` is great for encapsulating complex logic with multiple inputs. `QueryData` is more flexible because it composes inside larger queries; `SystemParam` is opaque from outside.
+
+**Exclusive systems are just systems (0.20).** `&mut World` is a plain `SystemParam`: put it anywhere in the list (after `In<T>`, which stays first) alongside `Local<T>`, `&mut SystemState<P>`, `&mut QueryState<D, F>`, or any param that registers no world access.
+
+```rust
+fn exclusive(
+    mut buf: Local<Vec<Entity>>,
+    world: &mut World,
+    state: &mut SystemState<Query<&Health>>,
+) {
+    let Ok(q) = state.get(world) else { return };
+    // ...
+}
+```
+
+`ExclusiveSystemParam`/`ExclusiveFunctionSystem` are gone, so a custom `SystemParam` whose `init_access` adds nothing works in exclusive systems for free. The catch: exclusivity is now checked at schedule build, not at compile time — `&mut World` next to `Commands`, `Query`, `Res`, `&Entities` or `WorldId` panics with `error[B0002]: … conflicts with a previous system parameter`. For the world id, call `world.id()` or take `Local<WorldId>`.
 
 ## Disabling entities
 

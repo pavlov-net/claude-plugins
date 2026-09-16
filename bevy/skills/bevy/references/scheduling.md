@@ -3,7 +3,7 @@
 ## Contents
 - The frame — schedule order: `First` → `PreUpdate` → `StateTransition` → `FixedMain` → `Update` → `PostUpdate` → `Last`
 - Where to put systems — picking the right schedule for input/logic/animation/cleanup
-- System ordering — sets, `.chain()`, `.before`/`.after`
+- System ordering — sets, `.chain()`, `.before`/`.after`, weak ordering (0.20)
 - Run conditions — skip-the-system semantics, common conditions
 - Fallible system params — `Single<...>`, `Option<Res<T>>` for silent skip
 - Returning Result from systems — `BevyError`, severity, global handler
@@ -28,7 +28,7 @@ Plus startup-only schedules that run once before the game loop begins:
 - **`Startup`** — application setup.
 - **`PostStartup`** — application cleanup/finalization of startup.
 
-`StateTransition` also runs once at the beginning of the app, between `PreStartup` and `Startup`, to handle initial-state `OnEnter` work.
+`StateTransition` also runs once at app startup, *before* `PreStartup` (startup order: `StateTransition` → `PreStartup` → `Startup` → `PostStartup`), so the initial state's `OnEnter` systems run before any startup schedule. To run something ahead of the initial `OnEnter`, insert a custom startup schedule with `MainScheduleOrder::insert_startup_before(StateTransition, MySchedule)`.
 
 ## Where to put systems
 
@@ -39,7 +39,7 @@ Plus startup-only schedules that run once before the game loop begins:
 - **`PreUpdate`** — input processing, clock ticks, anything that updates "current state" before `Update` reads it.
 - **`PostUpdate`** — animation drivers, LOD swaps, derived-component updates that read what `Update` just wrote.
 - **`FixedUpdate`** — physics, networking, anything that needs deterministic timestep.
-- **`Last`** — diagnostics, save game, anything that needs to see the final state of the frame.
+- **`Last`** — diagnostics, save game, anything that needs to see the final state of the frame. (0.20) For save-on-quit, put the system in `bevy::app::OnAppExitSystems`, which `WindowPlugin` orders after the window-close exit systems. The set carries no run condition of its own: `app.add_systems(Last, save_on_quit.in_set(OnAppExitSystems).run_if(on_message::<AppExit>));`.
 
 Don't put input/clock work in `Update` — it'll be one frame late for systems running before yours. Don't put animation in `Update` — it'll either flicker or fight transform propagation. The pre/update/post split exists for a reason; respect it.
 
@@ -73,6 +73,14 @@ app.add_systems(Update, my_system.after(some_dependency));
 
 Prefer named system sets. They survive refactors that move or rename functions.
 
+**Weak ordering (0.20).** `.chain_weak()` (and `.before_weak(set)` / `.after_weak(set)`) requests the same ordering as `.chain()`/`.before`/`.after`, but the scheduler keeps an edge only between systems whose tracked ECS accesses actually conflict — run conditions on the system and on its sets count toward that access. A system that produces deferred effects (`Commands`) and any exclusive system always count as conflicting, so sync points survive; and a conflicting pair reachable only through a non-conflicting middle system stays ordered. A strict `.before`/`.after`/`.chain()` on the same pair always wins.
+
+Use it on wide pipeline-style set chains where `.chain()` leaves threads idle. Keep `.chain()` when systems communicate through anything the scheduler can't see: channels, atomics, interior mutability behind `Res<T>`, statics, thread-locals. (`NonSend<T>`/`NonSendMut<T>` *are* tracked.)
+
+**Pitfall:** Bevy's own `PostUpdate` `UiSystems` chain, the `Core2d`/`Core3d` pass sets, and the render-world `RenderSystems` / `RenderGraphSystems` / `ExtractSchedule` sets are now weakly ordered, so a system dropped into one of them can see stale state from a set it thought had finished. See `references/pitfalls.md`.
+
+**Shake out accidental ordering (0.20).** With the opt-in `debug` cargo feature (also pulled in by the `dev` collection), `ScheduleBuildSettings` gains `shuffle_seed: Option<u64>`. See `references/testing.md` for the recipe.
+
 ## Run conditions
 
 Run conditions skip a system entirely when they return `false` — the system isn't dispatched, no parallelism cost, no execution overhead beyond the condition check.
@@ -84,9 +92,10 @@ app.add_systems(Update, update_enemies.run_if(in_state(GameState::Playing)));
 Bevy ships many common conditions (search docs.rs for `common_conditions`):
 
 - `in_state(S)` / `not(in_state(S))`
-- `state_changed::<S>()` / `state_exists::<S>()`
-- `resource_exists::<R>()` / `resource_changed::<R>()`
-- `on_message::<M>()` (skip unless any messages of type `M` were written)
+- `state_changed::<S>` / `state_exists::<S>`
+- `resource_exists::<R>` / `resource_changed::<R>`
+- `resource_exists_and(|r: &R| ...)` (0.20) — false if `R` is missing, else runs the predicate on `&R`; replaces the `resource_exists::<R>.and_then(...)` two-step
+- `on_message::<M>` (skip unless any messages of type `M` were written; it's a plain system fn — no parentheses)
 - `on_timer(Duration::from_secs(N))`
 - `input_just_pressed(KeyCode::Space)`
 
@@ -94,10 +103,10 @@ Compose with AND (chain `.run_if`) or boolean ops:
 
 ```rust
 app.add_systems(Update, my_system
-    .run_if(in_state(GameState::Playing).and(resource_exists::<Player>)));
+    .run_if(in_state(GameState::Playing).and_then(resource_exists::<Player>)));
 ```
 
-`.run_if(condition_a).run_if(condition_b)` is equivalent to `.run_if(a.and(b))` (AND-only). For other combinations use the `SystemCondition` trait methods `or`/`xor` (also `nand`/`nor`/`xnor`); to negate, wrap with the free function `not(condition)` from `common_conditions` (as in `not(in_state(S))` above) — `not` is a function, not a trait method.
+`.run_if(condition_a).run_if(condition_b)` is AND-only and evaluates *every* condition — equivalent to `a.and_eager(b)`, not `a.and_then(b)`. **(0.20)** the bare `and`/`or`/`nand`/`nor` methods are removed in favour of a short-circuiting form and an eager twin apiece (`and_then`/`and_eager`, and so on — `references/errors.md` has the table; `xor`/`xnor` always evaluate both). Use `_then`/`_else` when the second condition would fail validation on its own (`resource_exists::<R>.and_then(resource_equals(R(0)))`); prefer `_eager` when it carries change-detection, `Local` or `MessageReader` state, since short-circuiting means it only sees what changed since the last time it actually ran. To negate, wrap with the free function `not(condition)` from `common_conditions` — `not` is a function, not a trait method.
 
 Run conditions can be applied to entire system sets:
 
@@ -148,7 +157,7 @@ fn camera_log(query: Query<&Camera>) -> Result {
 
 Return type `Result` is `Result<(), BevyError>`. Bevy's `BevyError` has a blanket `From` for any `Error` impl, so `?` works on most error types.
 
-Default global handler panics on `Err`. Configure with `app.set_error_handler(warn)` for a warn-level log instead. Other presets exist: `error`, `info`, `debug`, `trace`, `ignore`.
+The default handler is `match_severity`, and errors default to `Severity::Panic`, so an unannotated `Err` panics. Configure with `app.set_error_handler(warn)` for a warn-level log instead. Other presets: `error`, `info`, `debug`, `trace`, `ignore`. **(0.20)** panics in systems, run conditions and commands are routed through the same handler — see `references/errors.md`.
 
 Per-error-call severity:
 
@@ -201,8 +210,10 @@ The transition isn't immediate. `NextState` is queued and applied when the `Stat
 In 0.18, `next_state.set(X)` re-fires `OnEnter`/`OnExit` even if the state was already `X`. **In 0.19 this consistency was extended to `DespawnOnEnter`/`DespawnOnExit`** — they now also trigger on same-state transitions (a bug where they didn't was fixed). If you want the old "skip if equal" behavior (no transition schedules, no scoped despawns):
 
 ```rust
-next_state.set_if_neq(AppState::InGame);
+next_state.set_if_different(AppState::InGame);   // (0.20) was set_if_neq
 ```
+
+Renamed in 0.20 so it stops colliding with the unrelated `Mut::set_if_neq` (which is unchanged); no alias ships, so `NextState::set_if_neq` is a hard compile error. Command form: `commands.set_state_if_different(X)`.
 
 Setup/teardown:
 
@@ -244,7 +255,7 @@ When the state exits, the entity (and its `linked_spawn` children) despawns auto
 - `DespawnOnEnter(State::X)` — despawn when entering.
 - `DespawnWhen(condition)` — despawn when an arbitrary state predicate matches.
 
-This pattern eliminates a huge class of "I forgot to clean up" bugs. Use it for menus, HUD elements, level entities — anything tied to a specific state. (For the 0.19 same-state-transition behavior, see the `set_if_neq` note above.)
+This pattern eliminates a huge class of "I forgot to clean up" bugs. Use it for menus, HUD elements, level entities — anything tied to a specific state. (For the 0.19 same-state-transition behavior, see the `set_if_different` note above.)
 
 ### Sub-states
 
@@ -380,7 +391,7 @@ fn tick_cooldowns(time: Res<Time>, mut q: Query<&mut Cooldown>) {
 
 fn check_cooldown(q: Query<&Cooldown>) {
     for c in &q {
-        if c.timer.finished() { /* ... */ }
+        if c.timer.is_finished() { /* ... */ }
     }
 }
 ```

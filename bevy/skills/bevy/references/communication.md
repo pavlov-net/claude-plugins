@@ -6,7 +6,7 @@
 - Messages — `MessageWriter`/`MessageReader`, registration, lifetime
 - Events + Observers — `On<E>` parameter, `world.trigger`/`commands.trigger`
 - EntityEvents — entity-targeted events, `#[event_target]`, immutability in 0.18
-- Component lifecycle observers — `Add`, `Insert`, `Discard`, `Remove`, `Despawn` (0.19 renamed `Replace` → `Discard`)
+- Component lifecycle observers — `On<Add<T>>` etc. (0.20 moved the component generic into the event; 0.19 renamed `Replace` → `Discard`)
 - Component hooks — `#[component(on_add = ...)]` direct registration; hook vs observer
 - Common patterns — hookup-on-spawn, damage batching, propagation
 
@@ -27,7 +27,7 @@ A type can implement both if a use case really needs both flavors, but it's rare
 | --- | --- |
 | "When X happens, immediately do Y to a specific entity." | `EntityEvent` + observer on that entity |
 | "When X happens anywhere, immediately do Y." | `Event` + global observer |
-| "When component T is added/removed, do Y." | `On<Add, T>` / `On<Remove, T>` observer (or `#[component(on_add = ...)]`) |
+| "When component T is added/removed, do Y." | `On<Add<T>>` / `On<Remove<T>>` observer (or `#[component(on_add = ...)]`) |
 | "Many places fire X; one place batches them." | `Message` + `MessageReader` |
 | "Fire X periodically; consumers process when convenient." | `Message` |
 | "Cross-frame buffering; messages may live one frame after writing." | `Message` |
@@ -164,7 +164,7 @@ commands.entity(player).observe(|hit: On<Hit>, mut hp: Query<&mut Health>| {
 });
 ```
 
-Per-entity observers are spawned as observer entities themselves, with an `Observer` component attached to the watched entity. They despawn when the watched entity despawns.
+Per-entity observers are separate entities carrying the `Observer` component; the *watched* entity gets an `ObservedBy` component listing them (`ObservedBy::get()`, `bevy::ecs::observer::ObservedBy` — not in the prelude). An observer is despawned only once *every* entity it watches (`Observer::watch_entities`) is gone. Entity cloning skips `ObservedBy` unless you call `EntityClonerBuilder::add_observers(true)`.
 
 In 0.18, `EntityEvent` is **immutable by default** — you can't mutate the target after constructing the event. Mutation moved to a separate `SetEntityEventTarget` trait, which is auto-impl'd only for propagated events.
 
@@ -220,15 +220,17 @@ Five lifecycle events, observable on any component:
 - **`Remove`** — fires when a component is removed and not replaced. Runs *before* the component is actually removed.
 - **`Despawn`** — fires for each component on an entity when the entity is despawned.
 
-Ordering: `Add` runs before `Insert`. `Discard` runs before `Remove`. `Despawn` runs last.
+Ordering: `Add` runs before `Insert`. `Discard` runs before `Remove`. On entity despawn the order is `Despawn` → `Discard` → `Remove`; all three fire before the components are actually removed, so the data is still readable in every handler. (0.19's docs said `Despawn` ran last; the code never did, and 0.20 fixed the docs.)
 
-Observe via the `On<Lifecycle, Component>` form:
+Observe via the `On<Lifecycle<Component>>` form (0.20; `On<Add, Player>` in 0.17–0.19):
 
 ```rust
-world.add_observer(|add: On<Add, Player>| {
+world.add_observer(|add: On<Add<Player>>| {
     info!("Player spawned: {}", add.entity);
 });
 ```
+
+`Add<B>`, `Insert<B>`, `Discard<B>`, `Remove<B>`, `Despawn<B>` are `EventPattern` types over the concrete events `AddEvent`/`InsertEvent`/`DiscardEvent`/`RemoveEvent`/`DespawnEvent` (the `*Event` structs are *not* in the prelude — `bevy::ecs::lifecycle::AddEvent`). `On` derefs to the event, so `add.entity` still works. The generic is a bundle used as an **OR** filter: `On<Add<(A, B)>>` fires when either is added. Observers watching a runtime `ComponentId` use `On<Add<()>>` with `Observer::new(..).with_component(id)`. Hooks (`#[component(on_add = ...)]`) are unchanged.
 
 This is the canonical replacement for "poll for `Added<Player>` in `Update` and do hookup work" — observers fire immediately on the lifecycle event, you don't pay the per-frame poll cost, and you have full system-param access in the handler.
 
@@ -296,13 +298,15 @@ Hooks are registered exactly once per type. Observers can be added/removed dynam
 #[derive(Component)]
 struct NeedsHookup;
 
-commands.add_observer(|add: On<Add, NeedsHookup>, mut commands: Commands /* deps */| {
+commands.add_observer(|add: On<Add<NeedsHookup>>, mut commands: Commands /* deps */| {
     // Do hookup work using full system params.
     commands.entity(add.entity).remove::<NeedsHookup>();
 });
 ```
 
 The observer fires *once*, immediately after `NeedsHookup` is added — no per-frame polling. The pattern of inserting a marker + observing its `Add` is more idiomatic than inserting and then checking `Added<...>` in `Update`.
+
+For entities spawned from a BSN scene, `Add` still runs top-down — before children exist. Use `On<Ready>` (`bevy::scene::Ready`, 0.20) when the hookup work needs the whole subtree. See `references/bsn.md`.
 
 **Damage batching** (canonical message use case):
 
@@ -339,3 +343,5 @@ commands.add_observer(|done: On<AnimationFinished>| { /* ... */ });
 ```
 
 **Custom event triggers**: the `Event::Trigger` associated type is the extension point. The default triggers (`GlobalTrigger`, `EntityTrigger`, `PropagateEntityTrigger`, `EntityComponentsTrigger`) cover almost everything. Implement `Trigger<E>` for an exotic case (e.g., events that fan out to all entities matching some predicate). Rare in application code; common in framework code. (0.19: `EntityComponentsTrigger` gained `old_archetype`/`new_archetype` fields, so destructuring its `components` field now needs a trailing `..`.)
+
+**(0.20) `On` lost its second `B: Bundle` generic**; the component filter lives on the pattern type via the prelude `EventPattern` trait. Every plain `Event` is implicitly an `EventPattern` with `Components = ()`, so `On<MyEvent>` is unchanged. A custom event *with* a component filter needs its own `EventPattern` impl **and** an `EntityEvent` whose trigger is `EntityComponentsTrigger` — with a plain `#[derive(Event)]` the component-filtered observer silently never fires.
